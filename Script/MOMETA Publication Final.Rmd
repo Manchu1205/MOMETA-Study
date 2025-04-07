@@ -1,0 +1,2843 @@
+---
+title: "MOMETA Publication Final"
+output: html_document
+date: "2025-03-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(12)
+```
+
+```{r}
+setwd("~/GitHub/mometa/")
+```
+
+### Install and load R packages
+```{r}
+library(readxl)
+library(readr)
+library(stringr)
+library(dplyr)
+library(haven)
+library(pheatmap)
+library(factoextra)
+library(cluster)
+library(fpc)
+library(ggplot2)
+library(ggpubr)
+library(caret)
+library(lmtest)
+library(ggrepel)
+library(tidyr)
+library(ggstatsplot)
+library(RColorBrewer)
+library(pROC)
+library(imputeLCMD)
+library(BiocManager)
+library(stringr)
+library(gridExtra)
+library(glmnet)
+library(writexl)
+library(lme4)
+library(ggsci)
+library(openxlsx)
+
+install.packages("extrafont")
+library(extrafont)
+font_import()
+loadfonts(device = "win")  # Use "win" for Windows
+fonts()
+```
+
+## Upload meta data 
+```{r}
+metadata=read.xlsx("MetaData for Publication.xlsx")
+
+metadata$Group=as.factor(metadata$Group)
+metadata$CaseControlFU=as.factor(metadata$CaseControlFU)
+metadata$Sepsis_outcome=as.factor(metadata$Sepsis_outcome)
+metadata$PID=as.factor(metadata$PID)
+metadata$Gender=as.factor(metadata$Gender)
+metadata$BloodC_result=as.factor(metadata$BloodC_result)
+metadata$Group_CIS=as.factor(metadata$Group_CIS)
+metadata$Culture_groups=as.factor(metadata$Culture_groups)
+metadata$Sample_origen_artheelven=as.factor(metadata$Sample_origen_artheelven)
+metadata$Mechanical_ventilation_YN=as.factor(metadata$Mechanical_ventilation_YN)
+metadata$IVH_YN=as.factor(metadata$IVH_YN)
+metadata$AB_at_sample=as.factor(metadata$AB_at_sample)
+```
+
+
+##Uploading Signaling Lipid raw data (area ratios)
+```{r}
+high_data = read_excel("High_Data.xlsx")
+low_data = read_excel("Low_Data.xlsx")
+
+high_metab_names=colnames(high_data)[2:ncol(high_data)]
+low_metab_names=colnames(low_data)[2:ncol(low_data)]
+
+##Removing internal identifiers
+high_mnames=str_sub(high_metab_names,5)
+low_mnames=str_sub(low_metab_names,5)
+
+common=intersect(high_mnames,low_mnames)
+
+high_fa_names=high_mnames[grep("FA", high_mnames)]
+low_fa_names=low_mnames[grep("FA", low_mnames)]
+
+##combining low and high assay
+sl_data=merge(x=low_data,y=high_data,by="NMC_Name",all.x=TRUE)
+
+#Add another column for NMC number
+sl_data$NMC_Num=substr(sl_data$NMC_Name,10,12)
+sl_data=sl_data%>%relocate(NMC_Num,.before = NMC_Name)
+
+#Convert metabolite values to numeric
+sl_data[,c(1,3:ncol(sl_data))] <- sapply(sl_data[,c(1,3:ncol(sl_data))], as.numeric)
+
+##Removing duplicates
+sl_data$BSL_FA18.1_w9=NULL
+sl_data$BSL_FA18.2_w6=NULL
+sl_data$BSL_FA20.3_w3=NULL
+sl_data$BSL_FA20.4_w6=NULL
+sl_data$BSL_FA22.6_w3=NULL
+
+sl_data$BSL_FA18.3=NULL
+sl_data$BSL_FA20.3_w6_wc=NULL
+sl_data$BSL_FA20.3_w9_wc=NULL
+sl_data$BSL_FA20.5_w3_wc=NULL
+sl_data$BSL_FA22.4_w6_wc=NULL
+sl_data$BSL_FA22.5_w3_wc=NULL
+sl_data$BSL_FA22.5_w6_wc=NULL
+sl_data$BSL_FA22.6_w3=NULL
+
+#Remove RAA_ from metab names
+colnames(sl_data)[3:ncol(sl_data)]=str_sub(colnames(sl_data)[3:ncol(sl_data)],5)
+
+#Remove _A1 from sample names
+sl_data$NMC_Name=substr(sl_data$NMC_Name,1,nchar(sl_data$NMC_Name)-3)
+
+colnames(sl_data)=make.names(colnames(sl_data))
+
+##Updating FA names to common names
+colnames(sl_data)[125:137]=c("OA","LA","ALA","GLA","ETE","DGLA","Mead.Acid","AA","EPA","AdA","Clupanodonic.acid","DPA","DHA")
+```
+
+##Uploading Amines raw Data (area ratios)
+```{r}
+amines_data <- read_excel("Amines_Data.xlsx")
+
+##Metabolite not reliable
+amines_data$BAA_pipecolic.acid=NULL
+
+#Add another column for NMC number
+amines_data$NMC_Num=substr(amines_data$NMC_Name,10,12)
+amines_data=amines_data%>%relocate(NMC_Num,.before = NMC_Name)
+
+#Remove BAA_ from metab names
+colnames(amines_data)[3:ncol(amines_data)]=str_sub(colnames(amines_data)[3:ncol(amines_data)],5)
+colnames(amines_data)=make.names(colnames(amines_data))
+
+#Remove _A1 from sample names
+amines_data$NMC_Name=substr(amines_data$NMC_Name,1,nchar(amines_data$NMC_Name)-3)
+
+#Convert metabolite values to numeric
+amines_data[,c(1,3:ncol(amines_data))] <- sapply(amines_data[,c(1,3:ncol(amines_data))], as.numeric)
+
+##Combine amines with signaling lipids
+sl_amines_data=merge(x=sl_data,y=amines_data,by="NMC_Num",all.x=TRUE)
+sl_amines_data$NMC_Name.y=NULL
+
+names(sl_amines_data)[2]="NMC_Name"
+
+metabs=names(sl_amines_data[,3:ncol(sl_amines_data)])
+```
+
+
+##merging metadata and metabolite data
+```{r}
+data=merge(x=sl_amines_data,y=metadata,by="NMC_Name",all.x=TRUE)
+
+#Moving meta data info before metabolite info
+move_col=colnames(data)[257:ncol(data)]
+data=data %>% relocate(move_col, .before=`X1_AG_2_AG`)
+
+data=data[,-c(3)]
+colnames(data)[2]="NMC_Num"
+```
+
+
+## Get Metabolite names
+```{r}
+metabs=colnames(data)[27:ncol(data)]
+```
+
+## Function to encode 0s and 1s based on missingness
+```{r}
+EncodeNA = function(data)
+{
+  D=data
+  for (i in 1:nrow(D)){
+    for (j in 1:ncol(D)){
+      if(is.na(D[i,j])==TRUE){
+        D[i,j]=1
+      }else{
+        D[i,j]=0
+      }
+    }
+  }
+  return(D)
+}
+```
+
+```{r}
+#Encode for missingness
+mdata=data[metabs]
+e_metabs=EncodeNA(mdata)
+
+#Missing Percentages
+miss=data.frame(matrix(nrow=length(metabs),ncol=2))
+colnames(miss)=c("Metabolite","Missing Percentage")
+miss$Metabolite=metabs
+for (i in 1:nrow(miss)){
+  metab=miss[i,1]
+  column=e_metabs[,metab]
+  ones=length(which(column==1))
+  miss[i,2]=(ones/nrow(data))*100
+}
+
+##Metabolites with missingness
+miss_only=miss[miss$`Missing Percentage`!=0,]
+
+#Function to return p-value from fisher test
+FisherP = function(data1,data2)
+{
+  t=table(data1,data2)
+  ft=fisher.test(t)
+  p=ft$p.value
+
+  return(p)
+}
+
+##Fisher test to check for randomness in missingness
+fisher_data=cbind(data$Sepsis_outcome,data$Group_CIS,e_metabs)
+miss_only$Fisherpval=NA
+colnames(fisher_data)[1]="Sepsis_outcome"
+
+for (i in 1:nrow(miss_only)){
+  metab=miss_only[i,1]
+  miss_only[i,3]=FisherP(fisher_data[,1],fisher_data[,metab])
+}
+
+miss_higher20=miss_only[miss_only$`Missing Percentage`>20,]
+miss_lower20=miss_only[miss_only$`Missing Percentage`<20,]
+
+
+##Metabolites that are not missing due to randomness
+miss_h20_p=miss_higher20[miss_higher20$Fisherpval<0.05,]
+miss_l20_p=miss_lower20[miss_lower20$Fisherpval<0.05,]
+
+##Plots the missingness across the 3 groups
+FisherPlot=function(data,tab1,tab2,pval){
+  ggbarstats(
+  data,{{tab1}},{{tab2}},
+  palette="Paired",
+  results.subtitle = FALSE,
+  subtitle = paste0(
+    "Fisher's exact test", ", p-value = ",
+    ifelse(pval < 0.001, "< 0.001", round(pval, 3))
+  )
+)
+}
+
+FisherPlot(fisher_data,"X1a_1b_dihomo_PGF2a" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="X1a_1b_dihomo_PGF2a" ,3])
+FisherPlot(fisher_data,"X6_keto_PGF1a" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="X6_keto_PGF1a" ,3])
+FisherPlot(fisher_data,"GUDCA" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="GUDCA" ,3])
+FisherPlot(fisher_data,"iPF2a_IV" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="iPF2a_IV" ,3])
+FisherPlot(fisher_data,"NO2_OA" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="NO2_OA" ,3])
+FisherPlot(fisher_data,"X13_14dihydro_PGF2a_wc" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="X13_14dihydro_PGF2a_wc
+" ,3])
+FisherPlot(fisher_data,"ResolvinE1_wc" ,"Sepsis_outcome",miss_higher20[miss_higher20$Metabolite=="ResolvinE1_wc" ,3])
+FisherPlot(fisher_data,"X5_HETrE" ,"Sepsis_outcome",miss_lower20[miss_lower20$Metabolite=="X5_HETrE" ,3])
+FisherPlot(fisher_data,"PGF1a" ,"Sepsis_outcome",miss_lower20[miss_lower20$Metabolite=="PGF1a" ,3])
+FisherPlot(fisher_data,"X2_3dinor_8iso_PGF2a_wc" ,"Sepsis_outcome",miss_lower20[miss_lower20$Metabolite=="X2_3dinor_8iso_PGF2a_wc" ,3])
+
+remove=miss_higher20$Metabolite
+
+mdata_rem=mdata[,!colnames(mdata)%in%remove]
+metabs=colnames(mdata_rem)
+
+#Filter on 20% missingness
+#return 1 for >20% missingness
+Filter20 = function(data,len)
+{
+  count=length(which(is.na(data)))
+  p=count/len
+  if(p>0.2){
+    return(1)
+  }else{
+    return(0)
+  }
+}
+
+##Check for missingness in samples
+s_filter=character(0)
+
+for (i in 1:nrow(mdata_rem)){
+  res=Filter20(mdata_rem[i,],ncol(mdata_rem))
+  if(res==1){
+    s_filter=append(s_filter,i,after=length(s_filter))
+  }
+}
+
+print(s_filter)
+
+##Remove samples based on outliers and those that did not pass quality control
+full_data=cbind(data[,1:26],mdata_rem)
+full_data=full_data[!full_data$NMC_Name%in%c("2118RAA_0023","2118RAA_0046","2118RAA_0147","2118RAA_0149","2118RAA_0197","2118RAA_0013","2118RAA_0033","2118RAA_0204"),]
+
+mdata=full_data[metabs]
+```
+##Load information regarding metabolites and their names to use instead of internal names
+```{r}
+Usenames=read.xlsx("Use Names List.xlsx")
+m_info=read.xlsx("Metabolite Information Publication.xlsx")
+oxy=read.xlsx("Oxylipin Information Publications.xlsx")
+```
+
+
+##Amines Ratios
+```{r}
+#Add ratio of metabolites as new features
+full_data$`hydroxylysine_to_lysine`=full_data$hydroxylysine/full_data$lysine
+full_data$`X4_hydroxyproline_to_proline`=full_data$X4_hydroxy_proline/full_data$proline
+full_data$`kynurenine_to_tryptophan`=full_data$kynurenine/full_data$tryptophan
+full_data$`serotonine_to_tryptophan`=full_data$serotonine/full_data$tryptophan
+full_data$`cystathionine_to_homocysteine`=full_data$cystathionine/full_data$homocysteine
+full_data$`cysteine_to_cystathionine`=full_data$cysteine/full_data$cystathionine
+full_data$`arginine_to_lysine`=full_data$arginine/full_data$lysine
+full_data$`ornithine_to_arginine`=full_data$ornithine/full_data$arginine
+full_data$`citrulline_to_ornithine`= full_data$citrulline/full_data$ornithine
+full_data$`arginine_to_ADMA`= full_data$arginine/full_data$asymmetric.dimethylarginine
+full_data$`glutamine_to_glutamic.acid`= full_data$glutamine/full_data$glutamic.acid
+full_data$`phenylalanine_to_tyrosine`= full_data$phenylalanine/full_data$tyrosine
+full_data$`glutamic.acid_to_GABA`=full_data$glutamic.acid/full_data$gamma_aminobutyric.acid
+
+
+Usenames=rbind(Usenames,c("hydroxylysine_to_lysine","OH-Lys/Lys"))
+m_info=rbind(m_info,c("hydroxylysine_to_lysine","Amine",NA))
+
+Usenames=rbind(Usenames,c("X4_hydroxyproline_to_proline","4-OH-Pro/Pro"))
+m_info=rbind(m_info,c("X4_hydroxyproline_to_proline","Amine",NA))
+
+Usenames=rbind(Usenames,c("kynurenine_to_tryptophan","Kyn/Trp"))
+m_info=rbind(m_info,c("kynurenine_to_tryptophan","Amine",NA))
+
+Usenames=rbind(Usenames,c("serotonine_to_tryptophan","5-HT/Trp"))
+m_info=rbind(m_info,c("serotonine_to_tryptophan","Amine",NA))
+
+Usenames=rbind(Usenames,c("cystathionine_to_homocysteine","Cystathionine/HomoCys"))
+m_info=rbind(m_info,c("cystathionine_to_homocysteine","Amine",NA))
+
+Usenames=rbind(Usenames,c("cysteine_to_cystathionine","Cys/Cystathionine"))
+m_info=rbind(m_info,c("cysteine_to_cystathionine","Amine",NA))
+
+Usenames=rbind(Usenames,c("arginine_to_lysine","Arg/Lys"))
+m_info=rbind(m_info,c("arginine_to_lysine","Amine",NA))
+
+Usenames=rbind(Usenames,c("ornithine_to_arginine","Ornithine/Arg"))
+m_info=rbind(m_info,c("ornithine_to_arginine","Amine",NA))
+
+Usenames=rbind(Usenames,c("citrulline_to_ornithine","Citrulline/Ornithine"))
+m_info=rbind(m_info,c("citrulline_to_ornithine","Amine",NA))
+
+Usenames=rbind(Usenames,c("arginine_to_ADMA","Arg/ADMA"))
+m_info=rbind(m_info,c("arginine_to_ADMA","Amine",NA))
+
+Usenames=rbind(Usenames,c("glutamine_to_glutamic.acid","Gln/Glu"))
+m_info=rbind(m_info,c("glutamine_to_glutamic.acid","Amine",NA))
+
+Usenames=rbind(Usenames,c("phenylalanine_to_tyrosine","Phe/Tyr"))
+m_info=rbind(m_info,c("phenylalanine_to_tyrosine","Amine",NA))
+
+Usenames=rbind(Usenames,c("glutamic.acid_to_GABA","Glu/GABA"))
+m_info=rbind(m_info,c("glutamic.acid_to_GABA","Amine",NA))
+
+metabs=colnames(full_data[,27:ncol(full_data)])
+```
+
+##Oxylipin Ratios
+```{r}
+for (i in 1:nrow(oxy)){
+  metab=oxy$Metabolite[i]
+  precur=oxy$Precursor[i]
+  enz=oxy$Enzyme[i]
+  metab_val=full_data[,metab]
+  precur_val=full_data[,precur]
+  ratio=metab_val/precur_val
+  name=paste0(paste0(paste0(paste0(metab,"_to_"),precur),"_"),enz)
+  full_data=cbind(full_data,ratio)
+  colnames(full_data)[ncol(full_data)]=name
+
+  metab_un=Usenames$Usename[Usenames$Metabolite==metab]
+  precur_un=Usenames$Usename[Usenames$Metabolite==precur]
+
+  Usenames=rbind(Usenames,c(name,paste0(paste0(metab_un,"/"),precur_un)))
+  m_info=rbind(m_info,c(name,"Oxylipin",NA))
+}
+```
+
+##Add other interesting features
+```{r}
+##omega-3 FA/omega-6 FA
+w3_names=m_info$Metabolite[m_info$SubCategory=="w3 FA"]
+w6_names=m_info$Metabolite[m_info$SubCategory=="w6 FA"]
+new_w3=full_data[,colnames(full_data)%in%w3_names]
+new_w6=full_data[,colnames(full_data)%in%w6_names]
+w36=rowSums(new_w3)/rowSums(new_w6)
+full_data$'w3FA_to_w6FA'=w36
+Usenames=rbind(Usenames,c("w3FA_to_w6FA","w3FA/w6FA"))
+m_info=rbind(m_info,c("w3FA_to_w6FA","Fatty acid",NA))
+
+##BCAA and AAA
+bcaa_names=c("valine","leucine","isoleucine")
+aaa_names=c("phenylalanine","tyrosine")
+new_bcaa=full_data[,colnames(full_data)%in%bcaa_names]
+new_aaa=full_data[,colnames(full_data)%in%aaa_names]
+full_data$'BCAA_to_tyrosine'=rowSums(new_bcaa)/full_data$tyrosine
+full_data$'BCAA_to_AAA'=rowSums(new_bcaa)/rowSums(new_aaa)
+Usenames=rbind(Usenames,c("BCAA_to_tyrosine","BCAA/Tyr"))
+m_info=rbind(m_info,c("BCAA_to_tyrosine","Amine",NA))
+Usenames=rbind(Usenames,c("BCAA_to_AAA","BCAA/AAA"))
+m_info=rbind(m_info,c("BCAA_to_AAA","Amine",NA))
+
+new_s=full_data[,c("valine","leucine","isoleucine")]
+bcaa=rowMeans(new_s)
+new_s=full_data[,c("phenylalanine","tyrosine","tryptophan")]
+AroA=rowMeans(new_s)
+full_data$BCAA=bcaa
+full_data$AAA=AroA
+Usenames=rbind(Usenames,c("BCAA","BCAA"))
+m_info=rbind(m_info,c("BCAA","Amine",NA))
+Usenames=rbind(Usenames,c("AAA","AAA"))
+m_info=rbind(m_info,c("AAA","Amine",NA))
+```
+
+##Add sums within compound classes
+```{r}
+##isoProstanes
+iso_names=matching_names <- grep("iso|iP", metabs[1:214], value = TRUE)
+iso_names=iso_names[-c(3,6,7)]
+full_data$`sum_isoprostanes`=rowSums((full_data[iso_names]))
+Usenames=rbind(Usenames,c("sum_isoprostanes","Sum iPs"))
+m_info=rbind(m_info,c("sum_isoprostanes","Oxylipin",NA))
+
+##prostaglandins
+pg_names=matching_names <- grep("PG", metabs[1:214], value = TRUE)
+pg_names=pg_names[1:8]
+full_data$`sum_prostaglandins`=rowSums((full_data[pg_names]))
+Usenames=rbind(Usenames,c("sum_prostaglandins","Sum PGs"))
+m_info=rbind(m_info,c("sum_prostaglandins","Oxylipin",NA))
+
+##thromboxames
+tb_names=matching_names <- grep("thrombox", metabs[1:214], value = TRUE)
+full_data$`sum_thromboxanes`=rowSums((full_data[tb_names]))
+Usenames=rbind(Usenames,c("sum_thromboxanes","Sum TXs"))
+m_info=rbind(m_info,c("sum_thromboxanes","Oxylipin",NA))
+
+##HDoHEs
+hdohe_names=matching_names <- grep("HDoHE", metabs[1:214], value = TRUE)
+full_data$`sum_hdohes`=rowSums((full_data[hdohe_names]))
+Usenames=rbind(Usenames,c("sum_hdohes","Sum HDoHEs"))
+m_info=rbind(m_info,c("sum_hdohes","Oxylipin",NA))
+
+##DiHETrEs
+dihetre_names=matching_names <- grep("DiHETrE", metabs[1:214], value = TRUE)
+full_data$`sum_dihetres`=rowSums((full_data[dihetre_names]))
+Usenames=rbind(Usenames,c("sum_dihetres","Sum DiHETrEs"))
+m_info=rbind(m_info,c("sum_dihetres","Oxylipin",NA))
+
+##HETE
+hete_names=matching_names <- grep("HETE", metabs[1:214], value = TRUE)
+hete_names=hete_names[-c(3,5)]
+full_data$`sum_hetes`=rowSums((full_data[hete_names]))
+Usenames=rbind(Usenames,c("sum_hetes","Sum HETEs"))
+m_info=rbind(m_info,c("sum_hetes","Oxylipin",NA))
+
+##HEPE
+hepe_names=matching_names <- grep("HEPE", metabs[1:214], value = TRUE)
+full_data$`sum_hepes`=rowSums((full_data[hepe_names]))
+Usenames=rbind(Usenames,c("sum_hepes","Sum HEPEs"))
+m_info=rbind(m_info,c("sum_hepes","Oxylipin",NA))
+
+##KETE
+kete_names=matching_names <- grep("KETE", metabs[1:214], value = TRUE)
+full_data$`sum_ketes`=rowSums((full_data[kete_names]))
+Usenames=rbind(Usenames,c("sum_ketes","Sum KETEs"))
+m_info=rbind(m_info,c("sum_ketes","Oxylipin",NA))
+
+##HODE
+hode_names=matching_names <- grep("HODE", metabs[1:214], value = TRUE)
+full_data$`sum_hodes`=rowSums((full_data[hode_names]))
+Usenames=rbind(Usenames,c("sum_hodes","Sum HODEs"))
+m_info=rbind(m_info,c("sum_hodes","Oxylipin",NA))
+
+##DiHETE
+dihete_names=matching_names <- grep("DiHETE", metabs[1:214], value = TRUE)
+full_data$`sum_dihetes`=rowSums((full_data[dihete_names]))
+Usenames=rbind(Usenames,c("sum_dihetes","Sum DiHETEs"))
+m_info=rbind(m_info,c("sum_dihetes","Oxylipin",NA))
+
+##HETrEs
+hetre_names=matching_names <- grep("HETrE", metabs[1:214], value = TRUE)
+hetre_names=hetre_names[c(3,5,7)]
+full_data$`sum_hetres`=rowSums((full_data[hetre_names]))
+Usenames=rbind(Usenames,c("sum_hetres","Sum HETrEs"))
+m_info=rbind(m_info,c("sum_hetres","Oxylipin",NA))
+
+##Bile acid sums
+ba_names=m_info$Metabolite[m_info$Category=="Bile Acid"]
+pba_names=m_info[1:214,]$Metabolite[m_info[1:214,]$SubCategory=="Primary BA"]
+sba_names=m_info[1:214,]$Metabolite[m_info[1:214,]$SubCategory=="Secondary BA"]
+
+full_data$`sum_ba`=rowSums((full_data[ba_names]))
+full_data$`sum_pba`=rowSums((full_data[pba_names]))
+full_data$`sum_sba`=rowSums((full_data[sba_names]))
+
+Usenames=rbind(Usenames,c("sum_ba","Sum BA"))
+Usenames=rbind(Usenames,c("sum_pba","Sum PBA"))
+Usenames=rbind(Usenames,c("sum_sba","Sum SBA"))
+
+m_info=rbind(m_info,c("sum_ba","Bile Acid",NA))
+m_info=rbind(m_info,c("sum_pba","Bile Acid",NA))
+m_info=rbind(m_info,c("sum_sba","Bile Acid",NA))
+
+metabs=names(full_data[,27:ncol(full_data)])
+
+# write.xlsx(m_info,"Final Metabolite Information Publication.xlsx")
+# write.xlsx(Usenames,"Final Use Name List Publication.xlsx")
+# m_info=read.xlsx("Final Metabolite Information Publication.xlsx")
+# Usenames=read.xlsx("Final Use Name List Publication.xlsx")
+```
+
+### Transformations
+```{r, fig.height=10, fig.width=15}
+mdata=full_data[metabs]
+
+boxplot(t(mdata), main="Raw Metabolite Data", ylab="Metabolite Area Ratio", xlab="Sample Number")
+
+#Log 2 transform
+log_metabs=log2(mdata)
+boxplot(t(log_metabs), main="Log2 Transformed Metabolite Data", ylab="Metabolite Area Ratio", xlab="Sample Number")
+
+set.seed(12)
+qrilc <- imputeLCMD::impute.QRILC(log_metabs, tune.sigma = 1)[[1]]
+```
+
+##Final Dataset final_data
+```{r}
+final_data=cbind(full_data[1:26],qrilc)
+
+metabs=colnames(final_data)[27:ncol(final_data)]
+
+#Total sepsis suspected samples
+case_sum=sum(final_data$CaseControlFU==1)
+paste("The number of suspected sepsis samples is", case_sum)
+
+#Total control samples
+con_sum=sum(final_data$CaseControlFU==2)
+paste("The number of control samples is", con_sum)
+
+#Total follow up samples
+fu_sum=sum(final_data$CaseControlFU==3)
+paste("The number of follow up samples is", fu_sum)
+```
+
+##STP Dataset sc_data
+```{r}
+sc_data_full=final_data[final_data$CaseControlFU!=3,]
+
+##Remove samples to ensure single sample per patient
+remove=c("C 85","C 74","C 61","C 15","C 59","C 78","C 66","C 68","C 47","C 90","C 27","C 7","C 25","C 58","C 57","C 72","C 34","C 31","C 60","C 82","C 80","C 36","C 81","C 37","C 30","C 8","C 51","C 38","C 33","C 64","C 45","C 43","C 39","C 83","C 12","C 88","C 55","C 84","C 56","C 17","C 86","C 67","C 63","C 76","C 46","C 48","C 77","C 20","C 69","C 42","C 19","S 89","S 50","S 88","S 84","S 80","S 31","S 60","S 66","S 25","S 81","S 82","S 72","S 8","S 77","S 65","S 57","S 27","S 78","S 76","S 64","S 38","S 83","S 44","S 7")
+
+sc_data=sc_data_full[!sc_data_full$Type%in%remove,]
+
+inf_sum=sum(sc_data$Group_CIS=="SINS")
+paste("The number of inflammation samples is", inf_sum)
+
+#Total control samples
+con_sum=sum(sc_data$Group_CIS=="Control")
+paste("The number of control samples is", con_sum)
+
+#Total sepsis up samples
+sep_sum=sum(sc_data$Group_CIS=="Sepsis")
+paste("The number of sepsis samples is", sep_sum)
+```
+
+##Manucript Figure S1 
+```{r,fig.height=10,fig.width=12}
+fig1=final_data
+
+sc_type=sc_data$Type
+fig1$SubGroups[fig1$Type%in%sc_type]="STP"
+fig1$SubGroups=as.factor(fig1$SubGroups)
+
+fig1$SubGroups[fig1$SubGroups=="Recovered Sepsis"]="Control"
+fig1$SubGroups[fig1$SubGroups=="Recovered SINS"]="Control"
+fig1$SubGroups[fig1$SubGroups=="SINS Follow up"]="SINS"
+fig1$SubGroups[fig1$SubGroups=="Sepsis Follow up"]="Sepsis"
+fig1$SubCategory[fig1$SubCategory=="Recovered"]="Control"
+
+
+p=ggplot(data=fig1,aes(x=`PNA_at_sampling`,y=PID,color=SubGroups,shape=SubCategory))+
+  scale_y_discrete(breaks = unique(fig1$PID))+scale_color_manual(values = c("Control"="#B2DF8A","SINS"="#A6CEE3","SINS Follow up"="#A6CEE3","Sepsis"="#1F78B4","Sepsis Follow up"="#1F78B4","STP"="gold"))+
+  scale_shape_manual(values = c("Control"=16,"SINS"=15,"Sepsis"=7,"Follow up"=17))+
+  geom_line(aes(group = PID), color = "gray", position = "identity")+geom_point(size=2.8)+theme_minimal()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    axis.title.x = element_text(size = 10, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 10, face = "bold", color = "black"),
+    legend.title = element_text(size = 10, face = "bold", color = "black"),
+    legend.text = element_text(size = 10, face = "bold", color = "black"),
+    axis.text.y = element_text(size = 8, color = "black"),
+    axis.text.x = element_text(size = 8, color = "black")
+  ) +
+  labs(
+    x = "Postnatal Age at Sampling",   
+    y = "Patient Number",          
+    color = "Sample Color",    
+    shape = "Sample Shape") +guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_S1.png",p,height = 10,width = 12,bg="white")
+```
+
+##Fold changes on untransformed values
+```{r}
+fc=full_data
+
+fc$Inflamed=ifelse(fc$Group_CIS=="Control","0","1")
+fc$Inflamed=as.factor(fc$Inflamed)
+
+fc=fc%>%relocate(Inflamed,.after = `Sepsis_outcome`)
+
+fc=fc[fc$NMC_Name%in%final_data$NMC_Name,]
+
+FC_tab=data.frame(matrix(nrow=length(metabs),ncol=11))
+colnames(FC_tab)=c("Metabolite","Mean FC Con-Inf","Median FC Con-Inf","Mean FC Con-Sep","Median FC Con-Sep","Mean FC Inf-Sep","Median FC Inf-Sep","Mean FC Con+Inf-Sep","Median FC Con+Inf-Sep","Mean FC Con-Inf+Sep","Median FC Con-Inf+Sep")
+FC_tab$Metabolite=metabs
+
+for (i in 1:nrow(FC_tab)){
+  met=FC_tab$Metabolite[i]
+  mean_con=mean(fc[fc$Group_CIS=="Control",met],na.rm=TRUE)
+  med_con=median(fc[fc$Group_CIS=="Control",met],na.rm=TRUE)
+  mean_inf=mean(fc[fc$Group_CIS=="SINS",met],na.rm=TRUE)
+  med_inf=median(fc[fc$Group_CIS=="SINS",met],na.rm=TRUE)
+  mean_sep=mean(fc[fc$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  med_sep=median(fc[fc$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  mean_coninf=mean(fc[fc$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  med_coninf=median(fc[fc$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  mean_infsep=mean(fc[fc$Inflamed==1,met],na.rm=TRUE)
+  med_infsep=median(fc[fc$Inflamed==1,met],na.rm=TRUE)
+  
+  FC_tab[i,2]=mean_inf/mean_con
+  FC_tab[i,3]=med_inf/med_con
+  FC_tab[i,4]=mean_sep/mean_con
+  FC_tab[i,5]=med_sep/med_con
+  FC_tab[i,6]=mean_sep/mean_inf
+  FC_tab[i,7]=med_sep/med_inf
+  FC_tab[i,8]=mean_sep/mean_coninf
+  FC_tab[i,9]=med_sep/med_coninf
+  FC_tab[i,10]=mean_infsep/mean_con
+  FC_tab[i,11]=med_infsep/med_con
+}
+```
+
+##Fold changes for males and females separately
+```{r}
+fc_male=fc[fc$Gender=="0",]
+fc_female=fc[fc$Gender=="1",]
+
+FC_tab_male=data.frame(matrix(nrow=length(metabs),ncol=3))
+colnames(FC_tab_male)=c("Metabolite","Mean FC Con+Inf-Sep","Median FC Con+Inf-Sep")
+FC_tab_male$Metabolite=metabs
+
+FC_tab_female=data.frame(matrix(nrow=length(metabs),ncol=3))
+colnames(FC_tab_female)=c("Metabolite","Mean FC Con+Inf-Sep","Median FC Con+Inf-Sep")
+FC_tab_female$Metabolite=metabs
+
+for (i in 1:nrow(FC_tab_male)){
+  met=FC_tab_male$Metabolite[i]
+  mean_sep=mean(fc_male[fc_male$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  med_sep=median(fc_male[fc_male$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  mean_coninf=mean(fc_male[fc_male$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  med_coninf=median(fc_male[fc_male$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  
+  FC_tab_male[i,2]=mean_sep/mean_coninf
+  FC_tab_male[i,3]=med_sep/med_coninf
+}
+
+for (i in 1:nrow(FC_tab_female)){
+  met=FC_tab_female$Metabolite[i]
+  mean_sep=mean(fc_female[fc_female$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  med_sep=median(fc_female[fc_female$Group_CIS=="Sepsis",met],na.rm=TRUE)
+  mean_coninf=mean(fc_female[fc_female$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  med_coninf=median(fc_female[fc_female$`Sepsis_outcome`==0,met],na.rm=TRUE)
+  
+  FC_tab_female[i,2]=mean_sep/mean_coninf
+  FC_tab_female[i,3]=med_sep/med_coninf
+}
+```
+
+
+
+##Create subsets and weights for LMER
+```{r}
+s=final_data
+s[metabs]=scale(s[metabs])
+s$PID=as.factor(s$PID)
+
+s$Inflamed=ifelse(s$Group_CIS=="Control","0","1")
+s$Inflamed=as.factor(s$Inflamed)
+
+s=s%>%relocate(Inflamed,.after = `Sepsis_outcome`)
+
+s_cs=s[s$Group_CIS!="SINS",]
+s_ci=s[s$Group_CIS!="Sepsis",]
+s_is=s[s$Group_CIS!="Control",]
+s_bc=s[s$Group_CIS=="Sepsis",]
+s_grams=s[s$`Culture_groups`=="Culture positive",]
+
+s_gramp=s[s$BloodC_result!=3 & s$Culture_groups!="Culture negative",]
+s_gramn=s[s$BloodC_result!=2 & s$Culture_groups!="Culture negative",]
+
+s_bcp=s[s$`Culture_groups`!="Culture negative",]
+s_bcn=s[s$`Culture_groups`!="Culture positive",]
+
+male=s[s$Gender=="0",]
+female=s[s$Gender=="1",]
+
+weights=function(data){
+newD=data
+sample_counts <- data.frame(matrix(nrow=nrow(newD),ncol=3))
+colnames(sample_counts)=c("PID", "Counts", "Weights")
+sample_counts$PID=newD$PID
+
+for(i in 1:nrow(sample_counts)){
+  pid=sample_counts$PID[i]
+  count=sum(newD$PID==pid)
+  sample_counts$Counts[i]=count
+  sample_counts$Weights[i]=1/count
+}
+
+# Create a vector of weights based on the sample counts
+weights_vector <- sample_counts$Weights
+return(weights_vector)
+}
+
+wm=weights(male)
+wf=weights(female)
+
+ws=weights(s)
+w_s_cs=weights(s_cs)
+w_s_ci=weights(s_ci)
+w_s_is=weights(s_is)
+w_s_bc=weights(s_bc)
+w_s_grams=weights(s_grams)
+
+w_s_gp=weights(s_gramp)
+w_s_gn=weights(s_gramn)
+
+w_s_bcp=weights(s_bcp)
+w_s_bcn=weights(s_bcn)
+```
+
+##PCA Plot function
+```{r}
+pcaPlot=function(data,grps,grps2,useshapes=F,title="",label){
+  
+  # PCA
+  pca <- prcomp(x=as.matrix(data),scale. = TRUE) 
+  expvar = (pca$sdev)^2 / sum(pca$sdev^2) 
+  
+  # prep
+  pc1name = sprintf('PC1 (%.1f%%)', expvar[1]*100)
+  pc2name = sprintf('PC2 (%.1f%%)', expvar[2]*100)
+  
+  # plot
+  
+  if (!useshapes) {
+    df = data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2], grps=grps)
+    p<-ggplot(data=df, aes(x=PC1,y=PC2,label=label,hjust=0.5,vjust=1.2))+
+      geom_point(size=4,aes(x=PC1,y=PC2,fill=grps), pch=21) + 
+      xlab(pc1name) + ylab(pc2name) + ggtitle(title) +geom_text_repel(
+        vjust = 1, 
+        hjust = 0.5, 
+        box.padding = 0.3, # Adjust padding around labels
+        point.padding = 0.2 # Adjust distance from points
+      )
+  } else {
+    df = data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2], grps=factor(grps), grps2 = as.factor(grps2))
+    p<-ggplot(data=df, aes(x=PC1,y=PC2,shape=grps2,label=label,hjust=0.5,vjust=1.2)) + 
+      geom_point(size=4,aes(colour=grps)) + 
+      xlab(pc1name) + ylab(pc2name) + ggtitle(title)+geom_text_repel(
+        vjust = 1, 
+        hjust = 0.5, 
+        box.padding = 0.3, # Adjust padding around labels
+        point.padding = 0.2 # Adjust distance from points
+      )
+  }
+  
+  return(p)
+}
+```
+
+##PCA plots to check for potential confounders
+```{r, fig.height=12, fig.width=18}
+metabs_sub=metabs[1:214]
+lab=s$NMC_Num
+
+pcaPlot(s[,metabs_sub],s$Group_CIS,title='Sample Category',label=lab)
+pcaPlot(s[,metabs_sub],s$Gender,title='Gender',label=lab)
+pcaPlot(s[,metabs_sub],s$GA_at_birth,title='Gestational Age',label=lab)
+pcaPlot(s[,metabs_sub],s$Birthweight,title='Birthweight',label=lab)
+pcaPlot(s[,metabs_sub],s$PNA_at_sampling,title='PNA at sampling',label=lab)
+pcaPlot(s[,metabs_sub],s$Sample_origen_artheelven,title='Sample origin',label=lab)
+pcaPlot(s[,metabs_sub],s$Mechanical_ventilation_YN,title='Mechanical Ventilation',label=lab)
+pcaPlot(s[,metabs_sub],s$Oxygen_level,title='Oxygen Level',label=lab)
+pcaPlot(s[,metabs_sub],s$IVH_YN,title='IVH',label=lab)
+pcaPlot(s[,metabs_sub],s$BloodC_result,title='Blood Culture Result',label=lab)
+pcaPlot(s[,metabs_sub],s$IL6,title='IL6',label=lab)
+pcaPlot(s[,metabs_sub],s$PCT,title='PCT',label=lab)
+pcaPlot(s[,metabs_sub],s$CRP,title='CRP',label=lab)
+pcaPlot(s[,metabs_sub],s$Culture_groups,title='Culture Groups',label=lab)
+pcaPlot(s[,metabs_sub],s$Sepsis_outcome,title='Sepsis_outcome',label=lab)
+pcaPlot(s[,metabs_sub],s$TPV_Perc,title='TPV Proportion',label=lab)
+
+
+p=prcomp(s[,metabs_sub])
+fviz_pca_biplot(p, alpha.var="contrib",col.var = "maroon") +
+  theme_minimal()
+
+```
+
+##Function for Linear mixed effect model
+```{r}
+library(lmerTest)
+
+LinearRegression_Mixed=function(data,confounders,outcome,mets,weight=NULL){
+  set.seed(12)
+  metabs=mets
+  D=data
+  conf=confounders
+  out=outcome
+  
+  p=data.frame(matrix(ncol=5,nrow=length(metabs)))
+  colnames(p)=c("Metabolite","Estimate","Standard Error","z-value","p-value")
+  z=1
+  for (i in 28:ncol(D)){
+    t=names(D)[i]
+    print(t)
+
+    lr=lmer(as.formula(paste(paste(paste(t,"~"),out),conf)), data=D, weights = weight)
+    a=coef(summary(lr))
+    p[z,1]=names(D)[i]
+    for (j in 1:4){
+      p[z,j+1]=a[2,j]
+      if(j>2){
+        p[z,j+1]=a[2,j+1]
+      }
+    }
+    
+    z=z+1
+  }
+  p_asc = p %>% arrange(p$`p-value`)
+  p_asc=cbind(p_asc,p.adjust(p_asc$`p-value`,method="BH"))
+  names(p_asc)[ncol(p_asc)]="Adjusted p-value"
+  
+
+  p_asc$Expression="Not significant"
+  p_asc$Expression[p_asc$Estimate > 0 & p_asc$`p-value`<0.05]="Upregulated"
+  p_asc$Expression[p_asc$Estimate <  0 & p_asc$`p-value`<0.05]="Downregulated"
+  
+  p_asc$deLabel=p_asc$Metabolite
+  p_asc$deLabel[p_asc$Expression=="Not significant"]=NA
+  
+  p_asc$Shape="Not significant"
+  p_asc$Shape[p_asc$`p-value`<0.05 & p_asc$`Adjusted p-value`<0.1]="Significant after correction"
+  p_asc$Shape[p_asc$`p-value`<0.05 & p_asc$`Adjusted p-value`>0.1]="Significant before correction"
+  
+  p_asc$Category="Not Significant"
+  m=m_info
+  
+  p_asc$UseN=NA
+  
+  
+  for(i in 1:nrow(p_asc)){
+    if(p_asc$Shape[i]!="Not significant"){
+    metab=p_asc$Metabolite[i]
+    p_asc$Category[i]=m$Category[m$Metabolite==metab]
+    p_asc$UseN[i]=Usenames$Usename[Usenames$Metabolite==metab]
+    }
+  }
+
+  return(p_asc)
+}
+```
+
+##Run Mixed Effect Models
+```{r}
+LRM_CI_S_wGen=LinearRegression_Mixed(s,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+AB_at_sample+Gender+(1|PID)","Sepsis_outcome",metabs,ws)
+
+LRM_C_IS_wGen=LinearRegression_Mixed(s,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+AB_at_sample+Gender+(1|PID)","Inflamed",metabs,ws)
+
+LRM_C_S_wGen=LinearRegression_Mixed(s_cs,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+AB_at_sample+Gender+(1|PID)","Sepsis_outcome",metabs,w_s_cs)
+
+LRM_C_I_wGen=LinearRegression_Mixed(s_ci,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+AB_at_sample+Gender+(1|PID)","Inflamed",metabs,w_s_ci)
+
+LRM_I_S_wGen=LinearRegression_Mixed(s_is,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+AB_at_sample+Gender+(1|PID)","Sepsis_outcome",metabs,w_s_is)
+
+LRM_CI_S_Male=LinearRegression_Mixed(male,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +(1|PID)","Sepsis_outcome",metabs,wm)
+
+LRM_CI_S_FeMale=LinearRegression_Mixed(female,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +(1|PID)","Sepsis_outcome",metabs,wf)
+
+LRM_CI_S_CP=LinearRegression_Mixed(s_bcp,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample+Gender +(1|PID)","Sepsis_outcome",metabs,w_s_bcp)
+
+LRM_CI_S_CN=LinearRegression_Mixed(s_bcn,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample+Gender +(1|PID)","Sepsis_outcome",metabs,w_s_bcn)
+
+LRM_CI_S_GP_wGen=LinearRegression_Mixed(s_gramp,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +Gender +AB_at_sample +(1|PID)","Sepsis_outcome",metabs,w_s_gp)
+
+LRM_CI_S_GN_wGen=LinearRegression_Mixed(s_gramn,"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight+Gender +AB_at_sample +(1|PID)","Sepsis_outcome",metabs,w_s_gn)
+```
+
+##Excel sheets for suuplementary tables
+```{r}
+supp_tab=function(LRM_results){
+  data=LRM_results
+  res_tab=data.frame(matrix(nrow=nrow(data),ncol=9))
+  colnames(res_tab)=c("Metabolite","Estimate","Standard Error","z-value","p-value","Adjusted p-value","Expression","Significance","Category")
+  for(i in 1:nrow(data)){
+    metab=data$Metabolite[i]
+    res_tab$Metabolite[i]=Usenames$Usename[Usenames$Metabolite==metab]
+    res_tab$Estimate[i]=data$Estimate[i]
+    res_tab$`Standard Error`[i]=data$`Standard Error`[i]
+    res_tab$`z-value`[i]=data$`z-value`[i]
+    res_tab$`p-value`[i]=data$`p-value`[i]
+    res_tab$`Adjusted p-value`[i]=data$`Adjusted p-value`[i]
+    res_tab$Expression[i]=ifelse(data$Estimate[i]<0,"Downregulated","Upregulated")
+    res_tab$Significance[i]=ifelse(data$`Adjusted p-value`[i]<0.1,"Significant after correction",ifelse(data$`Adjusted p-value`[i]>0.1&data$`p-value`[i]<0.05,"Significant before correction","Not significant"))
+    res_tab$Category[i]=m_info$Category[m_info$Metabolite==metab]
+  }
+  return(res_tab)
+}
+
+Inflamed_res=supp_tab(LRM_C_IS_wGen)
+write_xlsx(Inflamed_res,"Results_Inflamed.xlsx")
+
+Sepsis_res=supp_tab(LRM_CI_S_wGen)
+write_xlsx(Sepsis_res,"Results_Sepsis.xlsx")
+
+C_SINS_res=supp_tab(LRM_C_I_wGen)
+write_xlsx(C_SINS_res,"Results_C_SINS.xlsx")
+
+C_S_res=supp_tab(LRM_C_S_wGen)
+write_xlsx(C_S_res,"Results_C_S.xlsx")
+
+SINS_S_res=supp_tab(LRM_I_S_wGen)
+write_xlsx(SINS_S_res,"Results_SINS_S.xlsx")
+```
+
+
+##Volcano plot function
+```{r,fig.height=9,fig.width=12}
+library(ggthemes)
+volcano_plot=function(data){
+  D=data
+
+  significant_index_min=0
+  significant_index_max <- min(which(D$`Adjusted p-value` >= 0.1))
+  if(D$`Adjusted p-value`[1]<0.1){
+  significant_index_min <- max(which(D$`Adjusted p-value` <= 0.1))
+  }
+  thresh1=0
+  thresh2=0
+  t_mid=0
+  if(significant_index_min!=0){
+  thresh1=D$`p-value`[significant_index_max]
+  thresh2=D$`p-value`[significant_index_min]
+  t_mid=(thresh1+thresh2)/2
+  }
+  
+  D1=D
+  
+  ggplot(data = D1, aes(x = Estimate, y = -log10(`p-value`),color=Category,label=UseN,shape=Shape)) + 
+  geom_vline(xintercept = c(0), col = "gray", linetype = 'dashed',linewidth=1) +
+  geom_hline(yintercept = -log10(0.05), col = "red", linetype = 'dashed',linewidth=1) +
+  geom_hline(yintercept = -log10(t_mid), col = "firebrick", linetype = 'dotdash',linewidth=1) +
+  geom_point(size=1.8)+theme_few()+geom_text_repel(size=ifelse(D1$Shape == "Significant before correction", 4.5, 4.5),max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+
+  scale_color_manual(values = c("Amine" = "#00468BFF", "Bile Acid" = "#0099B4FF", "Endocannabinoid" = "#F7923D","Fatty acid"= "#8C6BB1", "Lysophospholipid"="#4F976C","Oxylipin"="#AE017E","Not Significant"="gray80","Steroid Hormone"="#67001F","PAF"="#6A51A3")) +
+  scale_shape_manual(values = c("Significant after correction" = 17, "Not significant" = 16, "Significant before correction" = 15))+ylab("-log10(p-value)")+
+  
+  theme(axis.text.x = element_text(size=11, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=11, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+theme(legend.position = "right")+
+theme(legend.text = element_text(size = 11, face = "bold",family="Times New Roman"))+theme(legend.title = element_text(size = 11, face = "bold",family="Times New Roman"))+
+  labs(
+    color = "Compound Class",    
+    shape = "Significance Level") +guides(color="none",shape="none")
+}
+```
+
+##Plot all volcano plots
+```{r,fig.height=9,fig.width=12}
+##Manuscript Figure 2
+volcano_plot(LRM_C_IS_wGen)
+d=LRM_C_IS_wGen
+##Metabs to remove clutter for figures
+rem=c("PGE1/DGLA","9-KODE/9-HODE","PGF2alpha/AA","12,13-EpOME/LA","14-HDoHE/DHA","S-Methyl-Cys","5-KETE/5-HETE","TLCA-3S","5-HETE/AA","LCA","cLPA(16:1)","14,15-DiHETrE","SDMA")
+d=d[!d$UseN%in%rem,]
+p=volcano_plot(d)
+ggsave("New_Figures_Publication/Figure_2a.png",p,height = 9,width = 9,bg="white")
+
+volcano_plot(LRM_CI_S_wGen)
+d=LRM_CI_S_wGen
+##Metabs to remove clutter for figures
+rem=c("PGE1/DGLA","9-KODE/9-HODE","PGF2alpha/AA","12,13-EpOME/LA","14-HDoHE/DHA","S-Methyl-Cys","5-KETE/5-HETE","TLCA-3S","5-HETE/AA","LCA","cLPA(16:1)","14,15-DiHETrE","SDMA")
+d=d[!d$UseN%in%rem,]
+p=volcano_plot(d)
+ggsave("New_Figures_Publication/Figure_2b.png",p,height = 9,width = 9,bg="white")
+
+##Manuscript Figure S2
+volcano_plot(LRM_C_I_wGen)
+d=LRM_C_I_wGen
+##Metabs to remove clutter for figures
+rem=c("PGE1/DGLA","9-KODE/9-HODE","PGF2alpha/AA","12,13-EpOME/LA","14-HDoHE/DHA","S-Methyl-Cys","5-KETE/5-HETE","TLCA-3S","5-HETE/AA","LCA","cLPA(16:1)","14,15-DiHETrE","SDMA")
+d=d[!d$UseN%in%rem,]
+p=volcano_plot(d)
+ggsave("New_Figures_Publication/Figure_S2a.png",p,height = 9,width = 9,bg="white")
+
+volcano_plot(LRM_C_S_wGen)
+d=LRM_C_S_wGen
+##Metabs to remove clutter for figures
+rem=c("PGE1/DGLA","9-KODE/9-HODE","PGF2alpha/AA","12,13-EpOME/LA","14-HDoHE/DHA","S-Methyl-Cys","5-KETE/5-HETE","TLCA-3S","5-HETE/AA","LCA","cLPA(16:1)","14,15-DiHETrE","SDMA")
+d=d[!d$UseN%in%rem,]
+p=volcano_plot(d)
+ggsave("New_Figures_Publication/Figure_S2b.png",p,height = 9,width = 9,bg="white")
+
+volcano_plot(LRM_I_S_wGen)
+d=LRM_I_S_wGen
+##Metabs to remove clutter for figures
+rem=c("PGE1/DGLA","9-KODE/9-HODE","PGF2alpha/AA","12,13-EpOME/LA","14-HDoHE/DHA","S-Methyl-Cys","5-KETE/5-HETE","TLCA-3S","5-HETE/AA","LCA","cLPA(16:1)","14,15-DiHETrE","SDMA")
+d=d[!d$UseN%in%rem,]
+p=volcano_plot(d)
+ggsave("New_Figures_Publication/Figure_S2c.png",p,height = 9,width = 9,bg="white")
+
+volcano_plot(LRM_CI_S_Male)
+volcano_plot(LRM_CI_S_FeMale)
+volcano_plot(LRM_CI_S_CP)
+volcano_plot(LRM_CI_S_CN)
+volcano_plot(LRM_CI_S_GP_wGen)
+volcano_plot(LRM_CI_S_GN_wGen)
+```
+
+##Functions for Directed p-value plot
+```{r,fig.height=9,fig.width=12}
+Qline=function(D){
+  set.seed(12)
+significant_index_min=0
+  significant_index_max <- min(which(D$`Adjusted p-value` >= 0.1))
+  if(D$`Adjusted p-value`[1]<0.1){
+  significant_index_min <- max(which(D$`Adjusted p-value` <= 0.1))
+  }
+  thresh1=0
+  thresh2=0
+  t_mid=NA
+  if(significant_index_min!=0){
+  thresh1=D$`p-value`[significant_index_max]
+  thresh2=D$`p-value`[significant_index_min]
+  t_mid=(thresh1+thresh2)/2
+  }
+  return(t_mid)
+}
+
+DirPval_tab=function(data1,data2,title1,title2,adjp1=NA,adjp2=NA){
+  set.seed(12)
+  adjp1=adjp1
+  adjp2=adjp2
+  
+A=data1[,c(1,2,5,9,10)]
+B=data2[,c(1,2,5,9,10)]
+
+A$`neglog10pval`=-log10(A$`p-value`)
+A=A%>%mutate(dirpval=ifelse(Estimate<0,-(neglog10pval),neglog10pval))
+
+B$`neglog10pval`=-log10(B$`p-value`)
+B=B%>%mutate(dirpval=ifelse(Estimate<0,-(neglog10pval),neglog10pval))
+
+A_B=data.frame(matrix(nrow=nrow(A),ncol=3))
+colnames(A_B)=c("Metabolite","A_dir_x","B_dir_y")
+A_B$Metabolite=A$Metabolite
+A_B$A_dir_x=A$dirpval
+A_B$Sig_x=NA
+A_B$Sig_y=NA
+A_B$Sig=NA
+A_B$Category=NA
+
+for (i in 1:nrow(A_B)){
+  metab=A_B[i,1]
+  ind=which(B$Metabolite==metab)
+  A_B[i,3]=B$dirpval[ind]
+  A_B[i,4]=A$Shape[A$Metabolite==metab]
+  A_B[i,5]=B$Shape[B$Metabolite==metab]
+}
+
+for (i in 1:nrow(A_B)){
+ 
+  if(A_B$Sig_x[i]=="Not significant"){
+    A_B$Sig[i]="NS_x"
+  }
+  if(A_B$Sig_x[i]=="Significant before correction"){
+    A_B$Sig[i]="SB_x"
+  }
+  if(A_B$Sig_x[i]=="Significant after correction"){
+    A_B$Sig[i]="SA_x"
+  }
+}
+
+for (i in 1:nrow(A_B)){
+ 
+  if(A_B$Sig_y[i]=="Not significant"){
+    A_B$Sig[i]=paste(A_B$Sig[i],"NS_y")
+  }
+  if(A_B$Sig_y[i]=="Significant before correction"){
+    A_B$Sig[i]=paste(A_B$Sig[i],"SB_y")
+  }
+  if(A_B$Sig_y[i]=="Significant after correction"){
+    A_B$Sig[i]=paste(A_B$Sig[i],"SA_y")
+  }
+}
+
+A_B$deLabel=NA
+A_B$deLabel[A_B$Sig!="NS_x NS_y"]=A_B$Metabolite[A_B$Sig!="NS_x NS_y"]
+A_B$UseN=NA
+for(i in 1:nrow(A_B)){
+    if(!is.na(A_B$deLabel[i])){
+    metab=A_B$Metabolite[i]
+    A_B$UseN[i]=Usenames$Usename[Usenames$Metabolite==metab]
+    }
+  }
+
+m=m_info
+  
+  for(i in 1:nrow(A_B)){
+    metab=A_B$Metabolite[i]
+    A_B$Category[i]=m$Category[m$Metabolite==metab]
+  }
+  
+  return(A_B)
+}
+
+```
+
+##Manuscript Figure S4
+##Directed p val plots Male-Female
+```{r,fig.height=9,fig.width=12}
+data1=LRM_CI_S_Male
+data2=LRM_CI_S_FeMale
+adj1=Qline(data1)
+adj2=Qline(data2)
+p1=DirPval_tab(data1,data2,"Male Sepsis Model","Female Sepsis Model",adj1,adj2)
+
+
+ggplot(data=p1, aes(x=A_dir_x, y=B_dir_y,col=Sig,label=UseN))+geom_point(size=2.5)+
+  geom_vline(xintercept = 0, col = "black", linetype = 'solid') +geom_hline(yintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1) +geom_vline(xintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1)+
+    geom_vline(xintercept = c(-log10(adj1),log10(adj1)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = c(-log10(adj2),log10(adj2)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = 0, col = "black", linetype = 'solid')+theme_classic()+xlab("Male Sepsis Model")+ylab("Female Sepsis Model")+
+  geom_text_repel( size=4.5,max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+theme_few()+
+  
+   scale_color_manual(values = c("NS_x NS_y"="gray90","SA_x NS_y"="royalblue4","SB_x NS_y" = "deepskyblue3","NS_x SA_y"="hotpink4","NS_x SB_y"="hotpink2","SA_x SA_y"="darkslategray4","SA_x SB_y"="coral2","SB_x SA_y" ="#FABA39FF", "SB_x SB_y" ="orangered4" ))+
+  
+  
+  theme(axis.text.x = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+
+
+##Remove clutter
+p1$UseN[p1$Sig=="SB_x SB_y"|p1$Sig=="SB_x SA_y"|p1$Sig=="SA_x SB_y"]=NA
+p=ggplot(data=p1, aes(x=A_dir_x, y=B_dir_y,col=Sig,label=UseN))+geom_point(size=2.5)+
+  geom_vline(xintercept = 0, col = "black", linetype = 'solid') +geom_hline(yintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1) +geom_vline(xintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1)+
+    geom_vline(xintercept = c(-log10(adj1),log10(adj1)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = c(-log10(adj2),log10(adj2)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = 0, col = "black", linetype = 'solid')+theme_classic()+xlab("Male Sepsis Model")+ylab("Female Sepsis Model")+
+  geom_text_repel( size=4.5,max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+theme_few()+
+  
+   scale_color_manual(values = c("NS_x NS_y"="gray90","SA_x NS_y"="royalblue4","SB_x NS_y" = "deepskyblue3","NS_x SA_y"="hotpink4","NS_x SB_y"="hotpink2","SA_x SA_y"="darkslategray4","SA_x SB_y"="coral2","SB_x SA_y" ="#FABA39FF", "SB_x SB_y" ="orangered4" ))+
+  
+  
+  theme(axis.text.x = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_S4a.png",p,height = 9,width = 12,bg="white")
+```
+##Manuscript Figure S4
+##Directed p val plots Gram Positive-Gram Negative
+```{r,fig.height=9,fig.width=12}
+data1=LRM_CI_S_GP_wGen
+data2=LRM_CI_S_GN_wGen
+adj1=Qline(data1)
+adj2=Qline(data2)
+p1=DirPval_tab(data1,data2,"Gram-Positive Sepsis Model","Gram-Negative Sepsis Model",adj1,adj2)
+
+ggplot(data=p1, aes(x=A_dir_x, y=B_dir_y,col=Sig,label=UseN))+geom_point(size=2.5)+
+  geom_vline(xintercept = 0, col = "black", linetype = 'solid') +geom_hline(yintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1) +geom_vline(xintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1)+
+    geom_vline(xintercept = c(-log10(adj1),log10(adj1)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = c(-log10(adj2),log10(adj2)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = 0, col = "black", linetype = 'solid')+theme_classic()+xlab("Gram-Positive Sepsis Model")+ylab("Gram-Negative Sepsis Model")+
+  geom_text_repel( size=4.5,max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+theme_few()+
+  
+  scale_color_manual(values = c("NS_x NS_y"="gray90","SA_x NS_y"="purple4","SB_x NS_y" = "mediumpurple","NS_x SA_y"="#3E5B32","NS_x SB_y"="#719F5C","SA_x SA_y"="darkslategray4","SA_x SB_y"="coral2","SB_x SA_y" ="#FABA39FF", "SB_x SB_y" ="orangered4" ))+
+  
+  
+  theme(axis.text.x = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+
+p1$UseN[p1$Sig=="SB_x SB_y"|p1$Sig=="SB_x SA_y"|p1$Sig=="SA_x SB_y"]=NA
+p=ggplot(data=p1, aes(x=A_dir_x, y=B_dir_y,col=Sig,label=UseN))+geom_point(size=2.5)+
+  geom_vline(xintercept = 0, col = "black", linetype = 'solid') +geom_hline(yintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1) +geom_vline(xintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1)+
+    geom_vline(xintercept = c(-log10(adj1),log10(adj1)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = c(-log10(adj2),log10(adj2)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = 0, col = "black", linetype = 'solid')+theme_classic()+xlab("Gram-Positive Sepsis Model")+ylab("Gram-Negative Sepsis Model")+
+  geom_text_repel( size=4.5,max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+theme_few()+
+  
+    scale_color_manual(values = c("NS_x NS_y"="gray90","SA_x NS_y"="purple4","SB_x NS_y" = "mediumpurple","NS_x SA_y"="#3E5B32","NS_x SB_y"="#719F5C","SA_x SA_y"="darkslategray4","SA_x SB_y"="coral2","SB_x SA_y" ="#FABA39FF", "SB_x SB_y" ="orangered4" ))+
+  
+  
+  theme(axis.text.x = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_S4b.png",p,height = 9,width = 12,bg="white")
+```
+
+##Manuscript Figure 3
+##Bar and Forest plots of interesting metabolites
+```{r,fig.height=5,fig.width=12}
+##List of interesting metabolites
+inf_marks=c("glycine","glutamine","lysine", "serine","histidine","saccharopine","ornithine","BCAA","X5_6_DiHETrE","X8_9_DiHETrE","X11_12_DiHETrE",
+            "X5_HETE","Sphingosine1P16.1","Sphingosine1P18.1","LPE16.1", "LPE18.2","LPE20.3","LPE20.5","LPE22.4","LPE22.6")
+
+exinf_marks=c("Cortisol","LPS18.0","LPI18.0","PGE1","serotonine_to_tryptophan","phenylalanine_to_tyrosine",
+              "tryptophan", "threonine", "arginine", "methionine", "tyrosine","X3_methoxytyrosine", "hydroxylysine" ,"X4_hydroxy_proline","X4_hydroxyproline_to_proline","X1_OG_2_OG" , "Sphingosine1P18.2","AAA")
+
+sep_marks=c("LPE16.0","LPE18.0","LPI16.0","LPS16.0","DHEA","sum_ketes","citrulline","homoserine", "n6.n6.n6.trimethyl_lysine","serotonine",
+            "arginine_to_lysine","putrescine","Sphinganine18.0_wc","Sphingosine18.1_wc" ,"BCAA_to_AAA","OA","X1_methylhistidine")
+```
+
+
+```{r,fig.height=5,fig.width=12}
+##Get Estimates of individual models
+cnames=c(inf_marks,exinf_marks,sep_marks)
+ests=data.frame(matrix(nrow=3*55,ncol=6))
+colnames(ests)=c("Metabolite","Model","Estimate","UseN","SD","Significance")
+
+z=1
+for(i in seq(1,nrow(ests),3)){
+
+  ests[i,1]=cnames[z]
+  ests[i+1,1]=cnames[z]
+  ests[i+2,1]=cnames[z]
+  
+  ests[i,2]="C_SSI"
+  ests[i+1,2]="C_S"
+  ests[i+2,2]="SSI_S"
+  
+  ests[i,3]=LRM_C_I_wGen$Estimate[LRM_C_I_wGen$Metabolite==cnames[z]]
+  ests[i+1,3]=LRM_C_S_wGen$Estimate[LRM_C_S_wGen$Metabolite==cnames[z]]
+  ests[i+2,3]=LRM_I_S_wGen$Estimate[LRM_I_S_wGen$Metabolite==cnames[z]]
+  
+  ests[i,4]=Usenames$Usename[Usenames$Metabolite==cnames[z]]
+  ests[i+1,4]=Usenames$Usename[Usenames$Metabolite==cnames[z]]
+  ests[i+2,4]=Usenames$Usename[Usenames$Metabolite==cnames[z]]
+  
+  ests[i,5]=LRM_C_I_wGen$`Standard Error`[LRM_C_I_wGen$Metabolite==cnames[z]]
+  ests[i+1,5]=LRM_C_S_wGen$`Standard Error`[LRM_C_S_wGen$Metabolite==cnames[z]]
+  ests[i+2,5]=LRM_I_S_wGen$`Standard Error`[LRM_I_S_wGen$Metabolite==cnames[z]]
+  
+  
+  ests[i,6]=LRM_C_I_wGen$Shape[LRM_C_I_wGen$Metabolite==cnames[z]]
+  ests[i+1,6]=LRM_C_S_wGen$Shape[LRM_C_S_wGen$Metabolite==cnames[z]]
+  ests[i+2,6]=LRM_I_S_wGen$Shape[LRM_I_S_wGen$Metabolite==cnames[z]]
+  
+  z=z+1
+}
+ests$UseN=as.factor(ests$UseN)
+ests$CI_lower=ests$Estimate-(1.96*ests$SD)
+ests$CI_higher=ests$Estimate+(1.96*ests$SD)
+
+ests$Model=factor(ests$Model,levels=c("C_SSI","C_S","SSI_S"))
+
+metabolite_positions <- seq_along(unique(ests$UseN)) - 0.5
+p=ggplot(ests, aes(x = UseN, y =  Estimate, color = Model, shape= Significance)) + 
+  geom_point(stat = "identity", position = position_dodge(width = 0.8), size=2) +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_higher), 
+                position = position_dodge(width = 0.8), width = 0,linewidth=0.7) +
+  geom_hline(yintercept = c(0), col = "black", linetype = 'dashed',linewidth=0.6) +
+  geom_vline(xintercept = c(metabolite_positions,55.5), color = "gray", linetype = "dashed", linewidth = 0.3) +
+  #scale_color_manual(values=c("C_S"="#1F78B4","C_SSI"="#A6CEE3","SSI_S"="#D4B9DA"))+
+  scale_color_manual(values=c("C_S"="#1F78B4","C_SSI"="#A6CEE3","SSI_S"="#CC79A7"))+
+  #geom_hline(yintercept = metabolite_positions, color = "gray", linetype = "dashed", linewidth = 0.3) +
+   scale_shape_manual(values=c("Significant after correction"=19,"Significant before correction"=10,"Not significant"=1))+
+  labs(
+       x = "Metabolite",
+       y = "Estimate") +
+  theme_classic2() +
+  theme(axis.text.x = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman", angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title = element_text(size = 12, face = "bold", color = "black", family = "Times New Roman"),
+        legend.text = element_text(size = 10, face = "bold", family = "Times New Roman"),
+        legend.title = element_text(size = 10, face = "bold", family = "Times New Roman"),
+        title = element_text(size = 10, face = "bold", family = "Times New Roman"))+
+   guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_3a.png",p,height = 5,width = 12,bg="white")
+```
+
+```{r,fig.height=5,fig.width=12}
+##Get estimates of Inflamed and Sepsis Models
+estimate_tab=data.frame(matrix(nrow=2*55,ncol=6))
+colnames(estimate_tab)=c("Metabolite","Model","Estimate","UseN","Significance","SD")
+z=1
+for(i in seq(1,nrow(estimate_tab),2)){
+
+  estimate_tab[i,1]=cnames[z]
+  estimate_tab[i+1,1]=cnames[z]
+  estimate_tab[i,2]="Inflamed"
+  estimate_tab[i+1,2]="Sepsis"
+  estimate_tab[i,3]=LRM_C_IS_wGen$Estimate[LRM_C_IS_wGen$Metabolite==cnames[z]]
+  estimate_tab[i+1,3]=LRM_CI_S_wGen$Estimate[LRM_CI_S_wGen$Metabolite==cnames[z]]
+  estimate_tab[i,4]=Usenames$Usename[Usenames$Metabolite==cnames[z]]
+  estimate_tab[i+1,4]=Usenames$Usename[Usenames$Metabolite==cnames[z]]
+  estimate_tab[i,5]=LRM_C_IS_wGen$Shape[LRM_C_IS_wGen$Metabolite==cnames[z]]
+  estimate_tab[i+1,5]=LRM_CI_S_wGen$Shape[LRM_CI_S_wGen$Metabolite==cnames[z]]
+  estimate_tab[i,6]=LRM_C_IS_wGen$`Standard Error`[LRM_C_IS_wGen$Metabolite==cnames[z]]
+  estimate_tab[i+1,6]=LRM_CI_S_wGen$`Standard Error`[LRM_CI_S_wGen$Metabolite==cnames[z]]
+  
+  z=z+1
+}
+estimate_tab$UseN=as.factor(estimate_tab$UseN)
+estimate_tab$CI_lower=estimate_tab$Estimate-(1.96*estimate_tab$SD)
+estimate_tab$CI_higher=estimate_tab$Estimate+(1.96*estimate_tab$SD)
+
+estimate_tab$Significance1=ifelse(estimate_tab$Significance=="Significant after correction","*\n*",ifelse(estimate_tab$Significance=="Significant before correction","*",""))
+estimate_tab$hjustval=ifelse(estimate_tab$Estimate<0,1,-0.01)
+
+metabolite_positions <- seq_along(unique(estimate_tab$UseN)) - 0.5
+estimate_tab$Model <- factor(estimate_tab$Model, levels = c("Sepsis", "Inflamed"))
+
+p=ggplot(estimate_tab, aes(x = UseN, y = `Estimate`, fill = Model)) + 
+  geom_bar(stat = "identity", position = position_dodge(), width = 1) +
+  scale_fill_manual(values=c("Sepsis"="#004949","Inflamed"="#009292")) +
+  labs(
+       y = "Estimate",
+       x = "Metabolite") +
+  geom_text(aes(label = `Significance1`, vjust = hjustval), 
+            position = position_dodge(width = 0.7), 
+            size = 3, 
+            family = "Times New Roman",
+            lineheight=0.5) +
+  geom_vline(xintercept = c(metabolite_positions,55.5), color = "gray", linetype = "dashed", linewidth = 0.3) +
+  theme_classic2() +
+  theme(
+    axis.text.x = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman", angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+    axis.title = element_text(size = 12, face = "bold", color = "black", family = "Times New Roman"),
+    legend.text = element_text(size = 10, face = "bold", family = "Times New Roman"),
+    legend.title = element_text(size = 10, face = "bold", family = "Times New Roman")
+  ) +guides(color = "none", shape = "none",fill="none")
+
+ggsave("New_Figures_Publication/Figure_3b.png",p,height = 5,width = 12,bg="white")
+```
+##Anova Function
+```{r}
+Pheno_ANOVA=function(data,mets,phenotype,colr,refer){
+  colr=data[,colr]
+  
+  levels=unique(data[[phenotype]][!is.na(data[[phenotype]])])
+  level_num=length(levels)
+  
+  m=(level_num*(level_num-1))/2
+  
+  
+  results=data.frame(matrix(nrow=length(mets),ncol=(2+m)))
+  colnames(results)[1]="Metabolite"
+  colnames(results)[2]="ANOVA p-value"
+  
+  results$Metabolite=mets
+
+for (i in 1:nrow(results)) {
+  metabolite = as.character(results$Metabolite[i])
+  r = aov(data[,metabolite] ~ relevel(data[,phenotype],refer))
+  sr = summary(r)
+  # Summary of the analysis
+  t=TukeyHSD(r)
+  results[i,2]=sr[[1]]$`Pr(>F)`[1]
+  
+  for (j in 1:m){
+    colnames(results)[2+j]=rownames(t[[1]])[j]
+    results[i,2+j]=t[[1]][j,4]
+  }
+  
+}
+  
+results$fdr=p.adjust(results$`ANOVA p-value`, method = "fdr")
+results=results%>%arrange(results$`ANOVA p-value`)
+
+return(results)
+}
+
+ANO_sc_group_cis=Pheno_ANOVA(s,metabs,"Group_CIS","Sepsis_outcome","Control")
+```
+
+##ANOVA Plot
+```{r,fig.height=3,fig.width=4}
+library(multcompView)
+Aov_plot=function(me, CA){
+  CA=CA
+  a=LRM_C_I_wGen$`p-value`[LRM_C_I_wGen$Metabolite==me]
+  b=LRM_I_S_wGen$`p-value`[LRM_I_S_wGen$Metabolite==me]
+  c=LRM_C_S_wGen$`p-value`[LRM_C_S_wGen$Metabolite==me]
+  
+  pval=c(a,b,c)
+  names(pval)=c("a-b","b-c","a-c")
+  labels=multcompLetters(pval)
+  letters=labels$Letters
+  
+  CA$Letters=NA
+  CA=CA%>%mutate(Letters=ifelse(Group_CIS=="Control", letters[1], ifelse(Group_CIS=="SINS", letters[2], letters[3])))
+  
+  max=max(CA[[me]])
+  min=min(CA[[me]])
+  
+ggplot(CA, aes(x = Group_CIS, y = !!sym(me), fill = Color)) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(position = position_jitter(width = 0.2), shape = 21, fill = "gray",color="black") +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "black",
+               position = position_dodge(width = 0.75)) +
+  labs(x=NULL, y = Usenames$Usename[Usenames$Metabolite == me]) +
+  
+  geom_text(aes(x=Group_CIS, y = max+0.25, label = Letters), vjust = -1, size=3.5 ,family="Times New Roman")+
+  
+  # Customize theme
+  theme_classic()+
+
+# Add comparison means
+ 
+
+  scale_fill_manual(values = c("Control"="#B2DF8A","SINS"="#A6CEE3","Sepsis"="#1F78B4"))+
+  guides(fill = "none")+
+  scale_x_discrete(labels = function(x) ifelse(x == "SINS", "SINS", ifelse(x=="Control","C","S")))+
+  theme(axis.text.x = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  
+        axis.text.y = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  
+        axis.title.x = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  
+        axis.title.y = element_text(size = 10, face = "bold",color="black",family="Times New Roman", margin = margin(r = 10)),
+    plot.margin = margin(l = 20, r = 20, t = 20, b = 20))+ylim(min, max+0.6)
+
+
+}
+```
+
+
+##Manuscript Figure 4
+```{r,fig.height=12,fig.width=12}
+data=s
+names=ANO_sc_group_cis
+phenotype="Group_CIS"
+colr="Group_CIS"
+my_comp=list(c("Control","SINS"),c("Control","Sepsis"),c("SINS","Sepsis"))
+ord=c("Control", "SINS","Sepsis")
+data$Group_CIS <- factor(data$Group_CIS, levels = c("Control","SINS","Sepsis"))
+
+c=data[,colr]
+CA=data[,c(names$Metabolite,phenotype)]
+CA$Color=c
+CA=CA %>% select(Color,everything())
+CA=na.omit(CA)
+my_comparisons=my_comp
+
+A=Aov_plot("glutamine",CA)
+B=Aov_plot("X8_9_DiHETrE",CA)
+C=Aov_plot("Sphingosine1P18.1",CA)
+D=Aov_plot("LPE20.5",CA)
+E=Aov_plot("LPI18.0",CA)
+F=Aov_plot("LPS18.0",CA)
+G=Aov_plot("Cortisol",CA)
+H=Aov_plot("PGE1",CA)
+I=Aov_plot("tryptophan",CA)
+J=Aov_plot("threonine",CA)
+K=Aov_plot("arginine",CA)
+L=Aov_plot("X1_OG_2_OG",CA)
+M=Aov_plot("LPE18.0",CA)
+N=Aov_plot("BCAA_to_AAA",CA)
+O=Aov_plot("citrulline",CA)
+P=Aov_plot("Sphinganine18.0_wc",CA)
+p=ggarrange(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P,O,ncol=4,nrow=4)
+
+ggsave("New_Figures_Publication/Figure_4_try.png",p,height = 12,width = 12,bg="white")
+```
+
+##Manuscript Figure S3
+```{r,fig.height=4,fig.width=4}
+p=Aov_plot("PGF1a",CA)
+ggsave("New_Figures_Publication/Figure_S3a.png",p,height = 4,width = 4,bg="white")
+
+LRM_CI_S_CP_wGen_con=LinearRegression_Mixed(s_bcp[s_bcp$Culture_groups!="SINS",],"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +Gender +(1|PID)","Sepsis_outcome",metabs,weights(s_bcp[s_bcp$Culture_groups!="SINS",]))
+
+LRM_CI_S_CN_wGen_con=LinearRegression_Mixed(s_bcn[s_bcn$Culture_groups!="SINS",],"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +Gender +(1|PID)","Sepsis_outcome",weights(s_bcn[s_bcn$Culture_groups!="SINS",]))
+
+LRM_CI_S_CP_wGen_inf=LinearRegression_Mixed(s_bcp[s_bcp$Culture_groups!="Control",],"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +Gender +(1|PID)","Sepsis_outcome",metabs,weights(s_bcp[s_bcp$Culture_groups!="Control",]))
+
+LRM_CI_S_CN_wGen_inf=LinearRegression_Mixed(s_bcn[s_bcn$Culture_groups!="Control",],"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +Gender +(1|PID)","Sepsis_outcome",weights(s_bcn[s_bcn$Culture_groups!="Control",]))
+
+LRM_CNCP_wGen=LinearRegression_Mixed(s[s$Culture_groups=="Culture negative"|s$Culture_groups=="Culture positive",],"+Mechanical_ventilation_YN +IVH_YN +Sample_origen_artheelven +Oxygen_level +TPV_Perc +PNA_at_sampling +GA_at_birth +Birthweight +AB_at_sample +Gender +(1|PID)","Culture_groups",metabs,
+                                     weights(s[s$Culture_groups=="Culture negative"|s$Culture_groups=="Culture positive",]))
+
+C_I=LRM_C_I_wGen$`p-value`[LRM_C_I_wGen$Metabolite=="PGF1a"]
+C_CNS=LRM_CI_S_CN_wGen_con$`p-value`[LRM_CI_S_CN_wGen_con$Metabolite=="PGF1a"]
+C_CPS=LRM_CI_S_CP_wGen_con$`p-value`[LRM_CI_S_CP_wGen_con$Metabolite=="PGF1a"]
+I_CNS=LRM_CI_S_CN_wGen_inf$`p-value`[LRM_CI_S_CN_wGen_inf$Metabolite=="PGF1a"]
+I_CPS=LRM_CI_S_CP_wGen_inf$`p-value`[LRM_CI_S_CP_wGen_inf$Metabolite=="PGF1a"]
+CNS_CPS=LRM_CNCP_wGen$`p-value`[LRM_CNCP_wGen$Metabolite=="PGF1a"]
+
+pval=c(C_I,I_CNS,CNS_CPS,C_CNS,C_CPS,CNS_CPS)
+  names(pval)=c("a-b","b-c","c-d","a-c","a-d","b-d")
+  labels=multcompLetters(pval)
+  letters=labels$Letters
+
+max=max(s[["PGF1a"]])
+  min=min(s[["PGF1a"]])
+  
+  CA=s
+  CA$Culture_groups <- factor(CA$Culture_groups , levels = c("Control","SINS","Culture negative","Culture positive"))
+
+CA$Letters=NA
+  CA=CA%>%mutate(Letters=ifelse(Culture_groups=="Control", letters[1], ifelse(Culture_groups=="SINS", letters[2],ifelse(Culture_groups=="Culture negative", letters[3], letters[4]))))
+p=ggplot(CA, aes(x = Culture_groups, y = PGF1a, fill = Culture_groups)) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(position = position_jitter(width = 0.2), shape = 21, fill = "gray",color="black") +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "black",
+               position = position_dodge(width = 0.75)) +
+  labs(x=NULL, y = "PGF1alpha") +
+  
+  geom_text(aes(x=Culture_groups, y = max+0.25, label = Letters), vjust = -1, size=3.5 ,family="Times New Roman")+
+  
+  # Customize theme
+  theme_classic()+
+
+# Add comparison means
+  scale_fill_manual(values = c("Control"="#B2DF8A","SINS"="#A6CEE3","Culture negative"="lightpink2","Culture positive"="hotpink3"))+
+  
+  guides(fill = FALSE)+
+  scale_x_discrete(labels = function(x) ifelse(x == "SINS", "SINS", ifelse(x=="Control","C",ifelse(x=="Culture negative","CNS","CPS"))))+
+  theme(axis.text.x = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  # Adjust font size and set to bold
+        axis.text.y = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  # Adjust font size and set to bold
+        axis.title.x = element_text(size = 10, face = "bold",color="black",family="Times New Roman"),  # Adjust font size and set to bold
+        axis.title.y = element_text(size = 10, face = "bold",color="black",family="Times New Roman"))+ylim(min, max+0.6)
+
+ggsave("New_Figures_Publication/Figure_S3b.png",p,height = 4,width = 4,bg="white")
+```
+
+##Supplementary Table for culture stratified analysis
+```{r}
+A=LRM_CI_S_CN
+B=LRM_CI_S_CP
+
+Culture_res=data.frame(matrix(nrow=length(metabs),ncol=16))
+colnames(Culture_res)=c("Metabolite","Expression Culture-Negative","Expression Culture-Positive","Significance Culture-Negative",	"Significance Culture-Positive","Estimate Culture-Negative","Estimate Culture-Positive","Standard Error Culture-Negative","Standard Error Culture-Positive","z-value Culture-Negative","z-value Culture-Positive","p-value Culture-Negative","p-value Culture-Positive","Adjusted p-value Culture-Negative","Adjusted p-value Culture-Positive","Category")
+
+for(i in 1:nrow(A)){
+  met=A$Metabolite[i]
+  Culture_res$Metabolite[i]=Usenames$Usename[Usenames$Metabolite==met]
+  Culture_res$`Expression Culture-Negative`[i]=ifelse(A$Estimate[A$Metabolite==met]<0,"Downregulated","Upregulated")
+  Culture_res$`Expression Culture-Positive`[i]=ifelse(B$Estimate[B$Metabolite==met]<0,"Downregulated","Upregulated")
+  Culture_res$`Significance Culture-Negative`[i]=ifelse(A$`Adjusted p-value`[A$Metabolite==met]<0.1,"Significant after correction",ifelse(A$`Adjusted p-value`[A$Metabolite==met]>0.1&A$`p-value`[A$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Culture_res$`Significance Culture-Positive`[i]=ifelse(B$`Adjusted p-value`[B$Metabolite==met]<0.1,"Significant after correction",ifelse(B$`Adjusted p-value`[B$Metabolite==met]>0.1&B$`p-value`[B$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Culture_res$`Estimate Culture-Negative`[i]=A$Estimate[A$Metabolite==met]
+  Culture_res$`Estimate Culture-Positive`[i]=B$Estimate[B$Metabolite==met]
+  Culture_res$`Standard Error Culture-Negative`[i]=A$`Standard Error`[A$Metabolite==met]
+  Culture_res$`Standard Error Culture-Positive`[i]=B$`Standard Error`[B$Metabolite==met]
+  Culture_res$`z-value Culture-Negative`[i]=A$`z-value`[A$Metabolite==met]
+  Culture_res$`z-value Culture-Positive`[i]=B$`z-value`[B$Metabolite==met]
+  Culture_res$`p-value Culture-Negative`[i]=A$`p-value`[A$Metabolite==met]
+  Culture_res$`p-value Culture-Positive`[i]=B$`p-value`[B$Metabolite==met]
+  Culture_res$`Adjusted p-value Culture-Negative`[i]=A$`Adjusted p-value`[A$Metabolite==met]
+  Culture_res$`Adjusted p-value Culture-Positive`[i]=B$`Adjusted p-value`[B$Metabolite==met]
+  Culture_res$Category[i]=m_info$Category[m_info$Metabolite==met]
+}
+
+write_xlsx(Culture_res,"Results_Culture.xlsx")
+```
+
+##Supplementary Table for gender stratified analysis
+```{r}
+A=LRM_CI_S_Male
+B=LRM_CI_S_FeMale
+
+Gender_res=data.frame(matrix(nrow=length(metabs),ncol=16))
+colnames(Gender_res)=c("Metabolite","Expression Male","Expression Female","Significance Male",	"Significance Female","Estimate Male","Estimate Female","Standard Error Male","Standard Error Female","z-value Male","z-value Female","p-value Male","p-value Female","Adjusted p-value Male","Adjusted p-value Female","Category")
+
+for(i in 1:nrow(A)){
+  met=A$Metabolite[i]
+  Gender_res$Metabolite[i]=Usenames$Usename[Usenames$Metabolite==met]
+  Gender_res$`Expression Male`[i]=ifelse(A$Estimate[A$Metabolite==met]<0,"Downregulated","Upregulated")
+  Gender_res$`Expression Female`[i]=ifelse(B$Estimate[B$Metabolite==met]<0,"Downregulated","Upregulated")
+  Gender_res$`Significance Male`[i]=ifelse(A$`Adjusted p-value`[A$Metabolite==met]<0.1,"Significant after correction",ifelse(A$`Adjusted p-value`[A$Metabolite==met]>0.1&A$`p-value`[A$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Gender_res$`Significance Female`[i]=ifelse(B$`Adjusted p-value`[B$Metabolite==met]<0.1,"Significant after correction",ifelse(B$`Adjusted p-value`[B$Metabolite==met]>0.1&B$`p-value`[B$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Gender_res$`Estimate Male`[i]=A$Estimate[A$Metabolite==met]
+  Gender_res$`Estimate Female`[i]=B$Estimate[B$Metabolite==met]
+  Gender_res$`Standard Error Male`[i]=A$`Standard Error`[A$Metabolite==met]
+  Gender_res$`Standard Error Female`[i]=B$`Standard Error`[B$Metabolite==met]
+  Gender_res$`z-value Male`[i]=A$`z-value`[A$Metabolite==met]
+  Gender_res$`z-value Female`[i]=B$`z-value`[B$Metabolite==met]
+  Gender_res$`p-value Male`[i]=A$`p-value`[A$Metabolite==met]
+  Gender_res$`p-value Female`[i]=B$`p-value`[B$Metabolite==met]
+  Gender_res$`Adjusted p-value Male`[i]=A$`Adjusted p-value`[A$Metabolite==met]
+  Gender_res$`Adjusted p-value Female`[i]=B$`Adjusted p-value`[B$Metabolite==met]
+  Gender_res$Category[i]=m_info$Category[m_info$Metabolite==met]
+}
+
+write_xlsx(Gender_res,"Results_Gender.xlsx")
+```
+
+##Supplementary Table for pathogen stratified analysis
+```{r}
+A=LRM_CI_S_GN_wGen
+B=LRM_CI_S_GP_wGen
+
+Gram_res=data.frame(matrix(nrow=length(metabs),ncol=16))
+colnames(Gram_res)=c("Metabolite","Expression Gram-Negative","Expression Gram-Positive","Significance Gram-Negative",	"Significance Gram-Positive","Estimate Gram-Negative","Estimate Gram-Positive","Standard Error Gram-Negative","Standard Error Gram-Positive","z-value Gram-Negative","z-value Gram-Positive","p-value Gram-Negative","p-value Gram-Positive","Adjusted p-value Gram-Negative","Adjusted p-value Gram-Positive","Category")
+
+for(i in 1:nrow(A)){
+  met=A$Metabolite[i]
+  Gram_res$Metabolite[i]=Usenames$Usename[Usenames$Metabolite==met]
+  Gram_res$`Expression Gram-Negative`[i]=ifelse(A$Estimate[A$Metabolite==met]<0,"Downregulated","Upregulated")
+  Gram_res$`Expression Gram-Positive`[i]=ifelse(B$Estimate[B$Metabolite==met]<0,"Downregulated","Upregulated")
+  Gram_res$`Significance Gram-Negative`[i]=ifelse(A$`Adjusted p-value`[A$Metabolite==met]<0.1,"Significant after correction",ifelse(A$`Adjusted p-value`[A$Metabolite==met]>0.1&A$`p-value`[A$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Gram_res$`Significance Gram-Positive`[i]=ifelse(B$`Adjusted p-value`[B$Metabolite==met]<0.1,"Significant after correction",ifelse(B$`Adjusted p-value`[B$Metabolite==met]>0.1&B$`p-value`[B$Metabolite==met]<0.05,"Significant before correction","Not significant"))
+  Gram_res$`Estimate Gram-Negative`[i]=A$Estimate[A$Metabolite==met]
+  Gram_res$`Estimate Gram-Positive`[i]=B$Estimate[B$Metabolite==met]
+  Gram_res$`Standard Error Gram-Negative`[i]=A$`Standard Error`[A$Metabolite==met]
+  Gram_res$`Standard Error Gram-Positive`[i]=B$`Standard Error`[B$Metabolite==met]
+  Gram_res$`z-value Gram-Negative`[i]=A$`z-value`[A$Metabolite==met]
+  Gram_res$`z-value Gram-Positive`[i]=B$`z-value`[B$Metabolite==met]
+  Gram_res$`p-value Gram-Negative`[i]=A$`p-value`[A$Metabolite==met]
+  Gram_res$`p-value Gram-Positive`[i]=B$`p-value`[B$Metabolite==met]
+  Gram_res$`Adjusted p-value Gram-Negative`[i]=A$`Adjusted p-value`[A$Metabolite==met]
+  Gram_res$`Adjusted p-value Gram-Positive`[i]=B$`Adjusted p-value`[B$Metabolite==met]
+  Gram_res$Category[i]=m_info$Category[m_info$Metabolite==met]
+}
+
+write_xlsx(Gram_res,"Results_Gram.xlsx")
+```
+
+
+##Manscrit figure 5
+##Dumbel Plot for gender
+```{r,fig.height=12,fig.width=9}
+data1=LRM_CI_S_Male
+data2=LRM_CI_S_FeMale
+adj1=Qline(data1)
+adj2=Qline(data2)
+p1=DirPval_tab(data1,data2,"Male Sepsis Model","Female Sepsis Model",adj1,adj2)
+
+dbnames=p1$Metabolite[p1$Sig=="SA_x NS_y"|p1$Sig=="SB_x NS_y"|p1$Sig=="NS_x SA_y"|p1$Sig=="NS_x SB_y"]
+db=data.frame(matrix(nrow=length(dbnames),ncol=8))
+colnames(db)=c("Metabolite","Est Male","Est Female","Sig Male","Sig Female","UseN","SD Male","SD Female")
+db$Metabolite=dbnames
+for(i in 1:nrow(db)){
+  met=db$Metabolite[i]
+  db$`Est Male`[i]=LRM_CI_S_Male$Estimate[LRM_CI_S_Male$Metabolite==met]
+  db$`Est Female`[i]=LRM_CI_S_FeMale$Estimate[LRM_CI_S_FeMale$Metabolite==met]
+  db$`Sig Male`[i]=LRM_CI_S_Male$Shape[LRM_CI_S_Male$Metabolite==met]
+  db$`Sig Female`[i]=LRM_CI_S_FeMale$Shape[LRM_CI_S_FeMale$Metabolite==met]
+  db$UseN[i]=Usenames$Usename[Usenames$Metabolite==met]
+  db$`SD Male`[i]=LRM_CI_S_Male$`Standard Error`[LRM_CI_S_Male$Metabolite==met]
+  db$`SD Female`[i]=LRM_CI_S_FeMale$`Standard Error`[LRM_CI_S_FeMale$Metabolite==met]
+}
+
+db$CI_lower_male=db$`Est Male`-(1.96*db$`SD Male`)
+db$CI_lower_female=db$`Est Female`-(1.96*db$`SD Female`)
+db$CI_upper_male=db$`Est Male`+(1.96*db$`SD Male`)
+db$CI_upper_female=db$`Est Female`+(1.96*db$`SD Female`)
+
+
+##Remove some to reduce clutter in figure
+torem=c("LCA","5-HETE/AA","12(13)-EpOME/Linoleic acid","9-KODE/9-HODE","S-Methyl-Cys","5-KETE/5-HETE","PGE1/DGLA","18-HEPE/EPA","14-HDoHE/DHA","TLCA-3S","SDMA","PGF2alpha/AA","14,15-DiHETrE","11,12-DiHETrE/11,12-EpETrE","5-HETrE/DGLA","9-HpODE/Linoleic acid","LPE(18:0)","PGE1","Sum PGs","14,15-DiHETE")
+
+db=db[!db$UseN%in%torem,]
+db$SigMpic=ifelse(db$`Sig Male`=="Significant after correction","**",ifelse(db$`Sig Male`=="Significant before correction","*","°"))
+db$SigFpic=ifelse(db$`Sig Female`=="Significant after correction","**",ifelse(db$`Sig Female`=="Significant before correction","*","°"))
+
+library(ggalt)
+# Create the dumbbell plot
+ggplot(db, aes(y = UseN)) +
+  geom_dumbbell(aes(x = `Est Male`, xend = `Est Female`),
+                color = "gray90", 
+                size = 3,
+                colour_x = "royalblue4", 
+                colour_xend = "hotpink3") +
+  labs(
+       x = "Estimate",
+       y = "Metabolite") +
+  geom_vline(xintercept = c(0), col = "black", linetype = 'dashed',linewidth=0.6) +
+  theme_few() +
+  geom_text(aes(x = `Est Male`, label = ifelse(`Sig Male` == "Significant after correction", "**", ifelse(`Sig Male` == "Significant before correction", "*", ""))),
+            vjust = 0.6, hjust = ifelse(db$`Est Male` > 0, -1, 2), size = 4, color = "royalblue4", family = "Times New Roman") +
+  geom_text(aes(x = `Est Female`, label = ifelse(`Sig Female` == "Significant after correction", "**", ifelse(`Sig Female` == "Significant before correction", "*", ""))),vjust = 0.6, hjust = ifelse(db$`Est Female` > 0, -1, 2), size = 4, color = "hotpink3", family = "Times New Roman") +
+  theme(axis.text.x = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+        axis.text.y = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title = element_text(size = 12, face = "bold", color = "black", family = "Times New Roman"),
+        plot.title = element_text(size = 12, face = "bold", family = "Times New Roman"))
+```
+
+
+```{r,fig.height=16,fig.width=9}
+
+# Reshape Data: Convert Male & Female Columns into Long Format
+df_long <- db %>%
+  pivot_longer(cols = c(`Est Male`, `Est Female`),
+               names_to = "Gender", values_to = "Estimate") %>%
+  mutate(
+    CI_Lower = ifelse(Gender == "Est Male", CI_lower_male, CI_lower_female),
+    CI_Upper = ifelse(Gender == "Est Male", CI_upper_male, CI_upper_female),
+    Significance = ifelse(Gender == "Est Male", `Sig Male`, `Sig Female`),
+    Gender = ifelse(Gender == "Est Male", "Male", "Female")  # Clean Gender Labels
+  )
+
+# Define Colors for Male & Female
+df_long$Color <- ifelse(df_long$Gender == "Male", "royalblue4", "hotpink3")  # Blue for Male, Pink for Female
+df_long$Gender <- factor(df_long$Gender, levels = c("Male", "Female"))
+
+#define colours for dots and bars
+dotCOLS = c("royalblue4","hotpink3")
+barCOLS = alpha(dotCOLS, 0.2)
+
+significance_symbols <- c(
+  "Significant after correction" = "**",
+  "Significant before correction" = "*",
+  "Not Significant" = ""  
+)
+
+
+p=ggplot(df_long, aes(x=UseN, y=Estimate, ymin=CI_Lower, ymax=CI_Upper,col=Gender,fill=Gender)) + 
+#specify position here
+  geom_linerange(size=3,position=position_dodge(width = 0.8)) +
+  geom_hline(yintercept=0, lty=2) +
+#specify position here too
+  geom_point(size=3, shape=21, colour="white", stroke = 0.8,position=position_dodge(width = 0.8)) +
+  geom_text(data = subset(df_long, Gender == "Male"), # Male data only
+            aes(x = UseN, y = CI_Upper + 0.03,  # Just above CI upper
+                label = significance_symbols[Significance]  # Correct symbol name
+            ),color="royalblue4",
+            vjust = 1.2, 
+            size = 3.5,
+            family = "Times New Roman") +
+  geom_text(data = subset(df_long, Gender == "Female"), 
+            aes(x = UseN, y = CI_Lower - 0.03,  
+                label = significance_symbols[Significance]  
+            ),color="hotpink3",
+            vjust = 0.2, 
+            size = 3.5,
+            family = "Times New Roman") +
+  
+  scale_fill_manual(values=dotCOLS)+
+  scale_color_manual(values=barCOLS)+
+  coord_flip() +
+  theme_few() +
+  
+  theme(axis.text.x = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman", hjust = 1),
+        axis.text.y = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title.y = element_blank(),
+        legend.text = element_text(size = 13, face = "bold", family = "Times New Roman"),
+        legend.title = element_text(size = 13, face = "bold", family = "Times New Roman"),
+        title = element_text(size = 13, face = "bold", family = "Times New Roman"))+
+   guides(color="none",shape="none",fill="none")
+
+ggsave("genderplot.png",p,height=16,width=11)
+```
+
+##Dumbel Plot for pathogen
+```{r,fig.height=12,fig.width=9}
+data1=LRM_CI_S_GN_wGen
+data2=LRM_CI_S_GP_wGen
+adj1=Qline(data1)
+adj2=Qline(data2)
+p1=DirPval_tab(data1,data2,"GN Sepsis Model","GN Sepsis Model",adj1,adj2)
+
+dbnames=p1$Metabolite[p1$Sig=="SA_x NS_y"|p1$Sig=="SB_x NS_y"|p1$Sig=="NS_x SA_y"|p1$Sig=="NS_x SB_y"]
+db=data.frame(matrix(nrow=length(dbnames),ncol=8))
+colnames(db)=c("Metabolite","Est GN","Est GP","Sig GN","Sig GP","UseN","SD GN","SD GP")
+db$Metabolite=dbnames
+for(i in 1:nrow(db)){
+  met=db$Metabolite[i]
+  db$`Est GN`[i]=LRM_CI_S_GN_wGen$Estimate[LRM_CI_S_GN_wGen$Metabolite==met]
+  db$`Est GP`[i]=LRM_CI_S_GP_wGen$Estimate[LRM_CI_S_GP_wGen$Metabolite==met]
+  db$`Sig GN`[i]=LRM_CI_S_GN_wGen$Shape[LRM_CI_S_GN_wGen$Metabolite==met]
+  db$`Sig GP`[i]=LRM_CI_S_GP_wGen$Shape[LRM_CI_S_GP_wGen$Metabolite==met]
+  db$UseN[i]=Usenames$Usename[Usenames$Metabolite==met]
+  db$`SD GN`[i]=LRM_CI_S_GN_wGen$`Standard Error`[LRM_CI_S_GN_wGen$Metabolite==met]
+  db$`SD GP`[i]=LRM_CI_S_GP_wGen$`Standard Error`[LRM_CI_S_GP_wGen$Metabolite==met]
+}
+
+db$CI_lower_GN=db$`Est GN`-(1.96*db$`SD GN`)
+db$CI_lower_GP=db$`Est GP`-(1.96*db$`SD GP`)
+db$CI_upper_GN=db$`Est GN`+(1.96*db$`SD GN`)
+db$CI_upper_GP=db$`Est GP`+(1.96*db$`SD GP`)
+
+
+##Remove some to reduce clutter in figure
+torem=c("LCA","5-HETE/AA","12(13)-EpOME/Linoleic acid","9-KODE/9-HODE","S-Methyl-Cys","5-KETE/5-HETE","PGE1/DGLA","18-HEPE/EPA","14-HDoHE/DHA","TLCA-3S","SDMA","PGF2alpha/AA","14,15-DiHETrE","11,12-DiHETrE/11,12-EpETrE","5-HETrE/DGLA","9-HpODE/Linoleic acid","LPE(18:0)","BCAA","BCAA/AAA")
+
+db=db[!db$UseN%in%torem,]
+db$SigMpic=ifelse(db$`Sig GN`=="Significant after correction","**",ifelse(db$`Sig GN`=="Significant before correction","*","°"))
+db$SigFpic=ifelse(db$`Sig GP`=="Significant after correction","**",ifelse(db$`Sig GP`=="Significant before correction","*","°"))
+
+library(ggalt)
+# Create the dumbbell plot
+ggplot(db, aes(y = UseN)) +
+  geom_dumbbell(aes(x = `Est GN`, xend = `Est GP`),
+                color = "gray90", 
+                size = 3,
+                colour_x = "#3E5B32", 
+                colour_xend = "purple4") +
+  labs(
+       x = "Estimate",
+       y = "Metabolite") +
+  geom_vline(xintercept = c(0), col = "black", linetype = 'dashed',linewidth=0.6) +
+  theme_few() +
+  geom_text(aes(x = `Est GN`, label = ifelse(`Sig GN` == "Significant after correction", "**", ifelse(`Sig GN` == "Significant before correction", "*", ""))),
+            vjust = 0.6, hjust = ifelse(db$`Est GN` > 0, -1, 2), size = 4, color = "#3E5B32", family = "Times New Roman") +
+  geom_text(aes(x = `Est GP`, label = ifelse(`Sig GP` == "Significant after correction", "**", ifelse(`Sig GP` == "Significant before correction", "*", ""))),vjust = 0.6, hjust = ifelse(db$`Est GP` > 0, -1, 2), size = 4, color = "purple4", family = "Times New Roman") +
+  theme(axis.text.x = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+        axis.text.y = element_text(size = 10, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title = element_text(size = 12, face = "bold", color = "black", family = "Times New Roman"),
+        plot.title = element_text(size = 12, face = "bold", family = "Times New Roman"))
+```
+
+```{r,fig.height=16,fig.width=12}
+
+# Reshape Data: Convert Male & Female Columns into Long Format
+df_long <- db %>%
+  pivot_longer(cols = c(`Est GN`, `Est GP`),
+               names_to = "Pathogen", values_to = "Estimate") %>%
+  mutate(
+    CI_Lower = ifelse(Pathogen == "Est GN", CI_lower_GN, CI_lower_GP),
+    CI_Upper = ifelse(Pathogen == "Est GN", CI_upper_GN, CI_upper_GP),
+    Significance = ifelse(Pathogen == "Est GN", `Sig GN`, `Sig GP`),
+    Pathogen = ifelse(Pathogen == "Est GN", "GN", "GP")  # Clean Pathogen Labels
+  )
+
+# Define Colors for GN & GP
+df_long$Color <- ifelse(df_long$Pathogen == "GN", "#3E5B32", "purple4")  # Blue for GN, Pink for GP
+df_long$Pathogen <- factor(df_long$Pathogen, levels = c("GN", "GP"))
+
+#define colours for dots and bars
+dotCOLS = c("#3E5B32","purple4")
+barCOLS = alpha(dotCOLS, 0.2)
+
+significance_symbols <- c(
+  "Significant after correction" = "**",
+  "Significant before correction" = "*",
+  "Not Significant" = ""  
+)
+
+
+p=ggplot(df_long, aes(x=UseN, y=Estimate, ymin=CI_Lower, ymax=CI_Upper,col=Pathogen,fill=Pathogen)) + 
+#specify position here
+  geom_linerange(size=3,position=position_dodge(width = 0.85)) +
+  geom_hline(yintercept=0, lty=2) +
+#specify position here too
+  geom_point(size=3, shape=21, colour="white", stroke = 0.8,position=position_dodge(width = 0.85)) +
+  geom_text(data = subset(df_long, Pathogen == "GN"), # GN data only
+            aes(x = UseN, y = CI_Upper + 0.03,  # Just above CI upper
+                label = significance_symbols[Significance]  # Correct symbol name
+            ),color="#3E5B32",
+            vjust = 1, 
+            size = 3.5,
+            family = "Times New Roman") +
+  geom_text(data = subset(df_long, Pathogen == "GP"), 
+            aes(x = UseN, y = CI_Lower - 0.03,  
+                label = significance_symbols[Significance]  
+            ),color="purple4",
+            vjust = 0.2, 
+            size = 3.5,
+            family = "Times New Roman") +
+  
+  scale_fill_manual(values=dotCOLS)+
+  scale_color_manual(values=barCOLS)+
+  coord_flip() +
+  theme_few() +
+  
+  theme(axis.text.x = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman", hjust = 1),
+        axis.text.y = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title = element_text(size = 13, face = "bold", color = "black", family = "Times New Roman"),
+        axis.title.y = element_blank(),
+        legend.text = element_text(size = 13, face = "bold", family = "Times New Roman"),
+        legend.title = element_text(size = 13, face = "bold", family = "Times New Roman"),
+        title = element_text(size = 13, face = "bold", family = "Times New Roman"))+
+   guides(color="none",shape="none",fill="none")
+
+ggsave("Pathogenplot.png",p,height=16,width=11)
+```
+
+###Logistic Regression Function
+```{r}
+LogisticRegression=function(data,confounders,outcome,mets){
+  set.seed(12)
+  metabs=mets
+  D=data
+  conf=confounders
+  out=outcome
+  
+  p=data.frame(matrix(ncol=7,nrow=length(metabs)))
+  colnames(p)=c("Metabolite","Estimate","Standard Error","z-value","p-value","CI_upper","CI_lower")
+  z=1
+  for (i in 28:ncol(D)){
+    print(names(D)[i])
+    t=D[,i]
+    lr=glm(as.formula(paste(paste(out,"~t"),conf)), family = "binomial",control=list(maxit=1000))
+    a=coef(summary(lr))
+    p[z,1]=names(D)[i]
+    for (j in 1:4){
+      p[z,j+1]=a[2,j]
+    }
+    
+    ci=confint(lr)[2,]
+    p$`CI_lower`[z]=ci[1]
+    p$`CI_upper`[z]=ci[2]
+    
+    z=z+1
+  }
+  
+    
+  p_asc = p %>% arrange(p$`p-value`)
+  p_asc=cbind(p_asc,p.adjust(p_asc$`p-value`,method="BH"))
+  names(p_asc)[ncol(p_asc)]="Adjusted p-value"
+  
+
+  p_asc$Expression="Not significant"
+  p_asc$Expression[p_asc$Estimate > 0 & p_asc$`p-value`<0.05]="Upregulated"
+  p_asc$Expression[p_asc$Estimate <  0 & p_asc$`p-value`<0.05]="Downregulated"
+  
+  p_asc$deLabel=p_asc$Metabolite
+  p_asc$deLabel[p_asc$Expression=="Not significant"]=NA
+  
+  p_asc$Shape="Not significant"
+  p_asc$Shape[p_asc$`p-value`<0.05 & p_asc$`Adjusted p-value`<0.1]="Significant after correction"
+  p_asc$Shape[p_asc$`p-value`<0.05 & p_asc$`Adjusted p-value`>0.1]="Significant before correction"
+  
+  p_asc$Category="Not Significant"
+  m=m_info
+  
+  p_asc$UseN=NA
+  
+  
+  for(i in 1:nrow(p_asc)){
+    if(p_asc$Shape[i]!="Not significant"){
+    metab=p_asc$Metabolite[i]
+    p_asc$Category[i]=m$Category[m$Metabolite==metab]
+    p_asc$UseN[i]=Usenames$Usename[Usenames$Metabolite==metab]
+    }
+  }
+  
+  p_asc=p_asc[,c(1:5, 8:ncol(p_asc), 6:7)]
+
+  return(p_asc)
+}
+```
+
+##Logistic Regression Models from STP dataset
+```{r}
+d=sc_data
+
+d$Inflamed=ifelse(d$Group_CIS=="Control","0","1")
+d$Inflamed=as.factor(d$Inflamed)
+
+d=d%>%relocate(Inflamed,.after = `Sepsis_outcome`)
+
+LR_C_I_wGen=LogisticRegression(d[d$Group_CIS!="Sepsis",],"+D$Mechanical_ventilation_YN +D$IVH_YN +D$Sample_origen_artheelven +D$Oxygen_level +D$TPV_Perc +D$PNA_at_sampling +D$GA_at_birth +D$Birthweight+D$AB_at_sample+D$Gender","D$Inflamed",metabs)
+
+LR_C_S_wGen=LogisticRegression(d[d$Group_CIS!="SINS",],"+D$Mechanical_ventilation_YN +D$IVH_YN +D$Sample_origen_artheelven +D$Oxygen_level +D$TPV_Perc +D$PNA_at_sampling +D$GA_at_birth +D$Birthweight+D$AB_at_sample+D$Gender","D$Sepsis_outcome",metabs)
+
+LR_I_S_wGen=LogisticRegression(d[d$Group_CIS!="Control",],"+D$Mechanical_ventilation_YN +D$IVH_YN +D$Sample_origen_artheelven +D$Oxygen_level +D$TPV_Perc +D$PNA_at_sampling +D$GA_at_birth +D$Birthweight+D$AB_at_sample+D$Gender","D$Sepsis_outcome",metabs)
+```
+
+
+##Manuscript Figure S5
+```{r,fig.height=9,fig.width=9}
+D1=LR_I_S_wGen
+p=ggplot(data = D1, aes(x = Estimate, y = -log10(`p-value`),color=Category,label=UseN,shape=Shape)) + 
+  geom_vline(xintercept = c(0), col = "gray", linetype = 'dashed',linewidth=1) +
+  geom_hline(yintercept = -log10(0.05), col = "red", linetype = 'dashed',linewidth=1) +
+  geom_point(size=1.8)+theme_few()+geom_text_repel(size=ifelse(D1$Shape == "Significant before correction", 4.5, 4.5),max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+
+  scale_color_manual(values = c("Amine" = "#00468BFF", "Bile Acid" = "#0099B4FF", "Endocannabinoid" = "#F7923D","Fatty acid"= "#8C6BB1", "Lysophospholipid"="#4F976C","Oxylipin"="#AE017E","Not Significant"="gray80","Steroid Hormone"="#67001F","PAF"="#6A51A3")) +
+  scale_shape_manual(values = c("Significant after correction" = 17, "Not significant" = 16, "Significant before correction" = 15))+ylab("-log10(p-value)")+
+  
+  theme(axis.text.x = element_text(size=11, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=11, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+theme(legend.position = "right")+
+theme(legend.text = element_text(size = 11, face = "bold",family="Times New Roman"))+theme(legend.title = element_text(size = 11, face = "bold",family="Times New Roman"))+
+  labs(
+    color = "Compound Class",    
+    shape = "Significance Level") +guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_S5a.png",p,height = 6,width = 8,bg="white")
+```
+
+
+##Directed p val plots LR C-I vs C-S
+```{r,fig.height=5,fig.width=8}
+data1=LR_C_S_wGen
+data2=LR_C_I_wGen
+adj1=Qline(data1)
+adj2=Qline(data2)
+p1=DirPval_tab(data1,data2,"C_S Model","C_SINS Model",adj1,adj2)
+
+
+p=ggplot(data=p1, aes(x=A_dir_x, y=B_dir_y,col=Sig,label=UseN))+geom_point(size=2)+
+  geom_vline(xintercept = 0, col = "black", linetype = 'solid') +geom_hline(yintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1) +geom_vline(xintercept = c(-log10(0.05),log10(0.05)), col = "black", linetype = 'dashed',linewidth=1)+
+    geom_vline(xintercept = c(-log10(adj1),log10(adj1)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = c(-log10(adj2),log10(adj2)), col = "firebrick", linetype = 'twodash',linewidth=1)+
+  geom_hline(yintercept = 0, col = "black", linetype = 'solid')+theme_classic()+xlab("C_S Model")+ylab("C_SINS Model")+
+  geom_text_repel( size=4,max.overlaps = Inf,fontface="bold",box.padding = 0.15,family="Times New Roman")+theme_few()+
+  
+   scale_color_manual(values = c("NS_x NS_y"="gray90","SA_x NS_y"="#004949","SB_x NS_y" = "#009E73","NS_x SA_y"="#CC79A7","NS_x SB_y"="#CC79A7","SA_x SA_y"="darkslategray4","SA_x SB_y"="coral2","SB_x SA_y" ="#FABA39FF", "SB_x SB_y" ="#FABA39FF" ))+
+  
+  
+  theme(axis.text.x = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=10, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=11, face="bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+
+ggsave("New_Figures_Publication/Figure_S5b.png",p,height = 6,width = 8,bg="white")
+
+```
+
+##Supp Tables for Logistic Regression
+```{r}
+C_SINS_LRres=supp_tab(LR_C_I_wGen)
+write_xlsx(C_SINS_LRres,"Results_C_SINS_LR.xlsx")
+
+C_S_LRres=supp_tab(LR_C_S_wGen)
+write_xlsx(C_S_LRres,"Results_C_S_LR.xlsx")
+
+SINS_S_LRres=supp_tab(LR_I_S_wGen)
+write_xlsx(SINS_S_LRres,"Results_SINS_S_LR.xlsx")
+```
+
+
+##Predictive Modelling
+
+```{r}
+mv_data=sc_data[sc_data$Group_CIS!="Control",]
+mv_data$log2_IL6=log2(mv_data$IL6)
+mv_data$log2_CRP=log2(mv_data$CRP)
+mv_data$log2_PCT=log2(mv_data$PCT)
+metabs_clin=c(metabs,"log2_IL6","log2_CRP","log2_PCT")
+x3_data=mv_data[!is.na(mv_data$IL6)&!is.na(mv_data$PCT)&!is.na(mv_data$CRP),c("Sepsis_outcome",metabs_clin)]
+
+library(caret)
+library(glmnet)
+library(pROC)
+library(dplyr)
+
+set.seed(12)
+n_boot <- 100
+labels <- as.numeric(as.character(mv_data$Sepsis_outcome))  # Ensure 0/1
+
+# Initialize storage
+feature_counts <- setNames(rep(0, length(metabs_sub)), metabs_sub)
+performance_results <- data.frame(Iteration = 1:n_boot, AUC = NA, Sensitivity = NA, Specificity = NA)
+
+for (i in 1:n_boot) {
+  cat("Bootstrap iteration:", i, "\n")
+  
+  # Bootstrap + OOB
+  sample_indices <- sample(1:nrow(mv_data), size = nrow(mv_data), replace = TRUE)
+  oob_indices <- setdiff(1:nrow(mv_data), sample_indices)
+  
+  # if (length(oob_indices) < 5) {
+  #   cat("Skipping iteration:", i, "due to small OOB size\n")  # ADDED LINE
+  #   next  # skip too-small OOB
+  # }  # skip too-small OOB
+
+  # Raw training and test data
+  x_boot_raw <- mv_data[sample_indices, metabs_sub]
+  x_oob_raw  <- mv_data[oob_indices, metabs_sub]
+  y_boot <- labels[sample_indices]
+  y_oob  <- labels[oob_indices]
+  
+  
+  # Scale based on training only
+  preproc <- preProcess(x_boot_raw, method = c("center", "scale"))
+  x_boot <- as.matrix(predict(preproc, x_boot_raw))
+  x_oob  <- as.matrix(predict(preproc, x_oob_raw))
+
+  # LASSO model
+  cvfit <- cv.glmnet(x_boot, y_boot, alpha = 1, family = "binomial", type.measure = "class")
+  model <- glmnet(x_boot, y_boot, alpha = 1, family = "binomial", lambda = cvfit$lambda.min)
+  
+  # Selected features
+  coef_vec <- coef(model)
+  selected <- rownames(coef_vec)[which(coef_vec != 0)]
+  selected <- selected[selected != "(Intercept)"]
+  
+  feature_counts[selected] <- feature_counts[selected] + 1
+
+  # Predict on OOB
+  probs <- predict(model, newx = x_oob, type = "response")
+  
+  
+  # ROC and metrics
+  roc_obj <- tryCatch(roc(y_oob, as.numeric(probs)), error = function(e) NULL)
+  if (!is.null(roc_obj)) {
+    performance_results$AUC[i] <- as.numeric(auc(roc_obj))
+
+    coords_best <- tryCatch({
+      coords(roc_obj, "best", ret = c("sensitivity", "specificity"), best.method = "youden")
+    }, error = function(e) list(sensitivity = NA, specificity = NA))
+
+    performance_results$Sensitivity[i] <- coords_best[["sensitivity"]][1]
+    performance_results$Specificity[i] <- coords_best[["specificity"]][1]
+  }
+}
+
+# Feature stability
+feature_stability <- data.frame(
+  Feature = names(feature_counts),
+  Times_Selected = as.integer(feature_counts),
+  Percent_Selected = round(100 * feature_counts / n_boot, 1)
+) %>% arrange(desc(Percent_Selected))
+
+# Performance summary
+summary_df <- data.frame(
+  Mean_AUC = mean(performance_results$AUC, na.rm = TRUE),
+  AUC_CI_Lower = quantile(performance_results$AUC, 0.025, na.rm = TRUE),
+  AUC_CI_Upper = quantile(performance_results$AUC, 0.975, na.rm = TRUE),
+  Mean_Sens = mean(performance_results$Sensitivity, na.rm = TRUE),
+  Mean_Spec = mean(performance_results$Specificity, na.rm = TRUE)
+)
+
+print(summary_df)
+head(feature_stability, 10)
+
+```
+##Get the ROC object and predicted classes with LOOCV function
+```{r}
+library(pROC)
+LOOCV=function(data,mod_mets,phenotype,title){
+  set.seed(12)
+  data=data
+  ph=phenotype
+  T=title
+  
+  metab_data=data[mod_mets]
+  
+  D=cbind(data[ph],metab_data)
+  D=as.data.frame(D)
+  colnames(D)[1]=ph
+  
+  your_data=D
+  # Initialize a vector to store the predicted probabilities
+  predicted_probabilities <- numeric()
+  
+  for (i in 1:nrow(your_data)) {
+  # Split the data into training and test sets
+  train_data <- your_data[-i, ]
+  test_data <- your_data[i, ]
+  #print(i)
+  model=glm(as.formula(paste(ph,"~.")),data=train_data,family = "binomial",maxit=1000000)
+  
+  # Predict the probability of sepsis for the test data point
+  predicted_prob <- predict(model, newdata = test_data, type = "response")
+  
+  # Store the predicted probability
+  predicted_probabilities <- c(predicted_probabilities, predicted_prob)
+  }
+
+roc_data <- roc(as.numeric(your_data[,ph])-1, predicted_probabilities)
+auc <- auc(roc_data)
+print(auc)
+
+thresholds <- roc_data$thresholds
+sensitivities <- roc_data$sensitivities
+specificities <- roc_data$specificities
+
+youden_j <- sensitivities + specificities - 1
+optimal_idx <- which.max(youden_j)
+
+optimal_threshold <- thresholds[optimal_idx]
+
+# Convert probabilities to class predictions using the optimal threshold
+predicted_classes <- ifelse(predicted_probabilities > optimal_threshold, 1, 0)
+
+return(list(roc_data,predicted_classes))
+}
+```
+
+
+##Manuscript Figure 6
+##Model comparisons with selected metabolites appearing in >45%
+```{r}
+library(purrr)
+library(ggthemes)
+
+xx_data=x3_data
+xx_data[metabs_clin]=scale(xx_data[metabs_clin])
+
+##Individual and combinatory clinical marker models
+roc1=LOOCV(xx_data,c("log2_CRP"),"Sepsis_outcome","CRP")[[1]]
+roc2=LOOCV(xx_data,c("log2_PCT"),"Sepsis_outcome","PCT")[[1]]
+roc3=LOOCV(xx_data,c("log2_IL6"),"Sepsis_outcome","IL6")[[1]]
+roc4=LOOCV(xx_data,c("log2_CRP","log2_PCT","log2_IL6"),"Sepsis_outcome","CRP+PCT+IL6")[[1]]
+
+roc5=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine"),"Sepsis_outcome","Metabolite Panel")[[1]]
+roc6=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_CRP"),"Sepsis_outcome","Metabolite Panel+CRP")[[1]]
+roc7=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_PCT"),"Sepsis_outcome","Metabolite Panel+PCT")[[1]]
+roc8=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_IL6"),"Sepsis_outcome","Metabolite Panel+IL6")[[1]]
+
+A=roc1
+B=roc2
+C=roc3
+D=roc4
+E=roc5
+F=roc6
+G=roc7
+H=roc8
+
+roc.list1=list(A,B,C,D)
+roc.list2=list(E,F,G,H)
+
+auc_values1 <- list("CRP" = A$auc, "PCT" = B$auc, "IL6" = C$auc, "CRP+PCT+IL6" = D$auc)
+auc_values2 <- list("Metabolite panel" = E$auc,"Metabolite panel+CRP" = F$auc,"Metabolite panel+PCT" = G$auc,"Metabolite panel+IL6" = H$auc)
+
+auc_df1 <- data.frame(
+  Comparison = names(auc_values1),
+  AUC = unlist(auc_values1)
+)
+
+auc_df2 <- data.frame(
+  Comparison = names(auc_values2),
+  AUC = unlist(auc_values2)
+)
+
+auc_df1 %>% 
+  mutate(label_long=paste0(Comparison,", AUC = ",paste(round(AUC,2))),
+         label_AUC=paste0("AUC = ",paste(round(AUC,2)))) -> data.labels1
+
+auc_df2 %>% 
+  mutate(label_long=paste0(Comparison,", AUC = ",paste(round(AUC,2))),
+         label_AUC=paste0("AUC = ",paste(round(AUC,2)))) -> data.labels2
+
+png("Clinical Markers Plot.png", width = 9, height = 5, units = "in", res = 300)
+names(roc.list1) <- c("CRP", "PCT", "IL6", "CRP+PCT+IL6")
+ggroc(roc.list1,size=1) +
+  scale_color_manual(
+  values = c(
+    "CRP" = "darkmagenta",
+    "PCT" = "steelblue",
+    "IL6" = "darkseagreen4",
+    "CRP+PCT+IL6"="midnightblue"
+  ),labels=data.labels1$label_long)+
+    theme_few()+ 
+    coord_equal()+
+    geom_abline(
+      slope = 1,
+      intercept = 1,
+      linetype = "dashed",
+      alpha = 1,
+      color = "darkgray")+
+    theme(axis.text.x = element_text(size = 11,face="bold", color = "black",family="Times New Roman"))+ 
+    theme(axis.text.y = element_text(size = 11,face="bold", color = "black",family="Times New Roman"))+
+    theme(axis.title.y =element_text(size = 12,face="bold", color = "black",family="Times New Roman") )+
+  theme(axis.title.x =element_text(size = 12,face="bold", color = "black",family="Times New Roman") )+
+theme(legend.text = element_text(size = 11, face = "bold", color = "black",family="Times New Roman"))+theme(legend.title = element_text(size = 11, face = "bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+dev.off()
+
+png("Metab+clin Markers Plot.png", width = 9, height = 5, units = "in", res = 300)
+names(roc.list2) <- c("Metabolite panel", "Metabolite panel+CRP","Metabolite panel+PCT", "Metabolite panel+IL6")
+ggroc(roc.list2,size=1) +
+  scale_color_manual(
+  values = c(
+    "Metabolite panel"="#152614",
+    "Metabolite panel+CRP" = "#832232",
+    "Metabolite panel+PCT" = "#157A6E",
+    "Metabolite panel+IL6" = "#F55536"
+  ),labels=data.labels2$label_long)+
+    theme_few()+ 
+    coord_equal()+
+    geom_abline(
+      slope = 1,
+      intercept = 1,
+      linetype = "dashed",
+      alpha = 1,
+      color = "darkgray")+
+    theme(axis.text.x = element_text(size = 11,face="bold", color = "black",family="Times New Roman"))+ 
+    theme(axis.text.y = element_text(size = 11,face="bold", color = "black",family="Times New Roman"))+
+    theme(axis.title.y =element_text(size = 12,face="bold", color = "black",family="Times New Roman") )+
+  theme(axis.title.x =element_text(size = 12,face="bold", color = "black",family="Times New Roman") )+
+theme(legend.text = element_text(size = 11, face = "bold", color = "black",family="Times New Roman"))+theme(legend.title = element_text(size = 11, face = "bold", color = "black",family="Times New Roman"))+guides(color="none",shape="none")
+dev.off()
+
+```
+
+##Get the best sensitivity, specificity, and optimal threshold
+```{r}
+metrics_result=data.frame(matrix(nrow=8,ncol=7))
+colnames(metrics_result)=c("Model","AUC","Optimal Threshold","Sensitivity","Specificity","PPV","F1")
+metrics_result$Model=c("CRP","PCT","IL6","CRP+PCT+IL6","Metabolite panel","Metabolite panel+CRP","Metabolite panel+PCT","Metabolite panel+IL6")
+
+roc_list=list(roc1,roc2,roc3,roc4,roc5,roc6,roc7,roc8)
+
+for(i in 1:nrow(metrics_result)){
+  rc=roc_list[[i]]
+  coords_optimal <- coords(rc, "best", ret=c("threshold", "sensitivity", "specificity", "ppv"))
+  th=coords_optimal[1]
+  sens=coords_optimal[2]
+  specs=coords_optimal[3]
+  ppv=coords_optimal[4]
+  f1=2*((sens*ppv)/(sens+ppv))
+  metrics_result$AUC[i]=round(auc(rc),4)
+  metrics_result$`Optimal Threshold`[i]=round(th,4)
+  metrics_result$Sensitivity[i]=round(sens,4)
+  metrics_result$Specificity[i]=round(specs,4)
+  metrics_result$PPV[i]=round(ppv,4)
+  metrics_result$F1[i]=round(f1,4)
+}
+
+
+```
+
+
+##McNemar Test
+```{r}
+mcnem_test=function(true_label,m1_label,m2_label){
+  y_true=true_label
+  m1=m1_label
+  m2=m2_label
+  
+  # Create contingency table
+  correct_m1 <- m1 == y_true
+  correct_m2 <- m2 == y_true
+  
+  a = sum(correct_m1 & correct_m2) # Model 1 correct Model 2 correct
+  b = sum(correct_m1 & !correct_m2) # Model 1 correct but not Model 2
+  c = sum(!correct_m1 & correct_m2) # Model 2 correct but not Model 1
+  d = sum(!correct_m1 & !correct_m2) # Model 1 and 2 not correct
+  
+  contingency_table <- matrix(c(a, b,
+                              c, d), nrow = 2,
+                            dimnames = list("Model_1" = c("Correct", "Incorrect"),
+                                            "Model_2" = c("Correct", "Incorrect")))
+  print(contingency_table)
+  # Perform McNemar's Test
+mcnemar.test(contingency_table)
+}
+
+proc1=LOOCV(xx_data,c("log2_CRP"),"Sepsis_outcome","CRP")[[2]]
+proc2=LOOCV(xx_data,c("log2_PCT"),"Sepsis_outcome","PCT")[[2]]
+proc3=LOOCV(xx_data,c("log2_IL6"),"Sepsis_outcome","IL6")[[2]]
+proc4=LOOCV(xx_data,c("log2_CRP","log2_PCT","log2_IL6"),"Sepsis_outcome","CRP+PCT+IL6")[[2]]
+proc5=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine"),"Sepsis_outcome","Metabolite Panel")[[2]]
+proc6=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_CRP"),"Sepsis_outcome","Metabolite Panel+CRP")[[2]]
+proc7=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_PCT"),"Sepsis_outcome","Metabolite Panel+PCT")[[2]]
+proc8=LOOCV(xx_data,c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine","log2_IL6"),"Sepsis_outcome","Metabolite Panel+IL6")[[2]]
+
+mcnem_test(xx_data$Sepsis_outcome,proc1,proc5)
+mcnem_test(xx_data$Sepsis_outcome,proc2,proc5)
+mcnem_test(xx_data$Sepsis_outcome,proc3,proc5)
+
+mcnem_test(xx_data$Sepsis_outcome,proc5,proc6)
+mcnem_test(xx_data$Sepsis_outcome,proc5,proc7)
+mcnem_test(xx_data$Sepsis_outcome,proc5,proc8)
+
+mcnem_test(xx_data$Sepsis_outcome,proc1,proc6)
+mcnem_test(xx_data$Sepsis_outcome,proc2,proc7)
+mcnem_test(xx_data$Sepsis_outcome,proc3,proc8)
+
+```
+
+```{r}
+data = xx_data[,c("Sepsis_outcome","X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine")]
+
+library(tidyverse)
+
+# Convert to long format for easier plotting
+df_long <- data %>%
+  pivot_longer(
+    cols = -Sepsis_outcome,
+    names_to = "Metabolite",
+    values_to = "Value"
+  )
+
+# Calculate group means for each metabolite
+mean_df <- df_long %>%
+  group_by(Sepsis_outcome, Metabolite) %>%
+  summarise(Mean_Value = mean(Value, na.rm = TRUE), .groups = "drop")
+
+mean_df$UseN=NA
+for(i in 1:nrow(mean_df)){
+  mean_df$UseN[i]=Usenames$Usename[Usenames$Metabolite==mean_df$Metabolite[i]]
+}
+
+ggplot(mean_df, aes(x = as.factor(Sepsis_outcome), y = Mean_Value, group = UseN, color = UseN)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    x = NULL, # Remove x-axis title
+    y = "Metabolite Mean",
+    color = "Metabolite" # Update legend title to "Metabolite"
+  ) +
+  scale_x_discrete(labels = c("0" = "SINS", "1" = "Sepsis")) + # Update x-axis labels
+  scale_color_brewer(palette = "Set2") + # Use a better color palette (e.g., Set1)
+  theme_few() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    axis.text.x = element_text(size = 10, face = "bold", color = "black"), # Customize x-axis text
+    axis.text.y = element_text(size = 10, face = "bold", color = "black"), # Customize y-axis text
+    axis.title.y = element_text(size = 10, face = "bold"), # Keep y-axis title bold
+    legend.text  = element_text(size = 10, face = "bold"),
+    legend.title  = element_text(size = 10, face = "bold"),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.25), # Add major grid lines
+    panel.grid.minor = element_line(color = "gray90", linewidth = 0.25) # Add minor grid lines
+  )
+```
+
+
+###Manuscript Figure S6
+##Checking correlation of metabolite markers with clinical markers
+```{r,fig.height=12,fig.width=20}
+library(DiffCorr)
+
+# Add ranked variables to xx_data (grouped by Sepsis_outcome)
+mvd=xx_data
+mvd <- mvd %>%
+  mutate(
+    rank_CRP = rank(log2_CRP),
+    rank_IL6 = rank(log2_IL6),
+    rank_PCT = rank(log2_PCT),
+    rank_X11b_PGF2a = rank(X11b_PGF2a),
+    rank_o_acetyl_serine = rank(o_acetyl_serine),
+    rank_PGE1 = rank(PGE1),
+    rank_X8iso_PGF3a_wc = rank(X8iso_PGF3a_wc),
+    rank_taurine = rank(taurine)
+  )
+
+mvd_inf=xx_data[xx_data$Sepsis_outcome==0,]
+mvd_sep=xx_data[xx_data$Sepsis_outcome==1,]
+
+mvd_inf$rank_CRP=rank(mvd_inf$log2_CRP)
+mvd_inf$rank_IL6=rank(mvd_inf$log2_IL6)
+mvd_inf$rank_PCT=rank(mvd_inf$log2_PCT)
+
+mvd_inf$rank_X11b_PGF2a=rank(mvd_inf$X11b_PGF2a)
+mvd_inf$rank_o_acetyl_serine=rank(mvd_inf$o_acetyl_serine)
+mvd_inf$rank_PGE1=rank(mvd_inf$PGE1)
+mvd_inf$rank_X8iso_PGF3a_wc=rank(mvd_inf$X8iso_PGF3a_wc)
+mvd_inf$rank_taurine=rank(mvd_inf$taurine)
+
+mvd_sep$rank_CRP=rank(mvd_sep$log2_CRP)
+mvd_sep$rank_IL6=rank(mvd_sep$log2_IL6)
+mvd_sep$rank_PCT=rank(mvd_sep$log2_PCT)
+
+mvd_sep$rank_X11b_PGF2a=rank(mvd_sep$X11b_PGF2a)
+mvd_sep$rank_o_acetyl_serine=rank(mvd_sep$o_acetyl_serine)
+mvd_sep$rank_PGE1=rank(mvd_sep$PGE1)
+mvd_sep$rank_X8iso_PGF3a_wc=rank(mvd_sep$X8iso_PGF3a_wc)
+mvd_sep$rank_taurine=rank(mvd_sep$taurine)
+
+xivar1=c("CRP_log2","IL6_log2","PCT_log2")
+yjvar2=c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine")
+
+xivar11=c("rank_CRP","rank_IL6","rank_PCT")
+yjvar21=c("rank_X11b_PGF2a","rank_o_acetyl_serine","rank_PGE1","rank_X8iso_PGF3a_wc","rank_taurine")
+
+nm=data.frame(matrix(nrow=8,ncol=2))
+colnames(nm)=c("Name","UseN")
+nm$Name=c(xivar11,yjvar21)
+nm$UseN[1]="CRP"
+nm$UseN[2]="IL6"
+nm$UseN[3]="PCT"
+nm$UseN[4]="11beta-PGF2alpha"
+nm$UseN[5]="o-acetyl-serine"
+nm$UseN[6]="PGE1"
+nm$UseN[7]="8iso-PGF3alpha"
+nm$UseN[8]="taurine"
+
+cor_plot1=function(xivar1,yjvar2){
+  xivar1=xivar1
+  yjvar2=yjvar2
+  inf_cor=cor.test(mvd_inf[,xivar1],mvd_inf[,yjvar2],method="spearman",exact=FALSE)
+  sep_cor=cor.test(mvd_sep[,xivar1],mvd_sep[,yjvar2],method="spearman",exact=FALSE)
+
+diff_p=compcorr(11,inf_cor$estimate,33,sep_cor$estimate)$pval
+  
+  p=ggscatter(mvd, x = xivar1,y=yjvar2, shape = 1, add = "reg.line", 
+                          cor.coef = FALSE, cor.method="spearman", color = "Sepsis_outcome", conf.int = FALSE, legend = "right") + 
+            geom_point(aes(fill = Sepsis_outcome), shape = 21,size=3.5) +
+            geom_abline(aes(slope = coefficients(lm(.data[[yjvar2]]~.data[[xivar1]]))[2], 
+                            intercept = coefficients(lm(.data[[yjvar2]]~.data[[xivar1]]))[1]), size = 1) +
+            ylab(nm$UseN[nm$Name==yjvar2]) + xlab(nm$UseN[nm$Name==xivar1]) + 
+            scale_color_manual(values = c("0"="#A6CEE3","1"="#1F78B4"))+
+     scale_fill_manual(values = c("0"="#A6CEE3","1"="#1F78B4"))+
+            stat_cor(aes(color = Sepsis_outcome),method="spearman", label.y.npc = "top", label.x.npc = "middle",size=5) +
+            stat_cor(method="spearman",label.y.npc = "top", label.x.npc = "left",size=5)+ggtitle(paste("Differential correlation p-value",round(diff_p,4)))+guides(color="none",fill="none")+
+  
+  theme(axis.text.x = element_text(size=12, face="bold", color = "black",family="Times New Roman"),
+        axis.text.y = element_text(size=12, face="bold", color = "black",family="Times New Roman"),
+        axis.title = element_text(size=12, face="bold", color = "black",family="Times New Roman"))+theme(legend.position = "right")+
+theme(legend.text = element_text(size = 12, face = "bold",family="Times New Roman"))+theme(legend.title = element_text(size = 12, face = "bold",family="Times New Roman"))
+  return(p)
+}
+
+
+
+plot_list=list()
+z=1
+for(i in 1:3){
+  for(j in 1:5){
+    plot_list[[z]]=cor_plot1(xivar11[i],yjvar21[j])
+    z=z+1
+  }
+}
+
+# Arrange the plots in a 3x5 grid
+png("Spearmans.png", width = 22, height = 12, units = "in", res = 300)
+grid.arrange(grobs = plot_list, nrow = 3, ncol = 5)
+dev.off()
+```
+
+##Manuscript Figure 7
+##Circos Data
+##Do after predictive model finalized
+```{r}
+library(circlize)
+
+circ=data.frame(matrix(nrow=length(metabs),ncol=1))
+colnames(circ)="Metabolite"
+circ$Metabolite=metabs
+circ$UseN=Usenames$Usename[Usenames$Metabolite==circ$Metabolite]
+circ$Category=NA
+for(i in 1:296){
+  met=circ$Metabolite[i]
+  circ$Category[i]=m_info$Category[m_info$Metabolite==met]
+}
+  
+xlim <- data.frame()
+for (i in unique(circ$Category)) {
+  xlim <- rbind(xlim, 
+                data.frame(name = i, start = 0, 
+                           end = length(which(circ$Category == i)),color = "#dddddd"))
+}
+
+xlim=data.frame(matrix(nrow=296,ncol=4))
+colnames(xlim)=c("name","start","end","color")
+xlim$name=metabs
+xlim$start=seq(0,295)
+xlim$end=seq(1:296)
+xlim$color="#dddddd"
+xlim$name=Usenames$Usename[Usenames$Metabolite==xlim$name]
+
+A=LRM_CI_S_Male
+adj1=Qline(A)
+
+B=LRM_CI_S_FeMale
+adj2=Qline(B)
+
+p1=DirPval_tab(A,B,"Sepsis Model","Inflamed Model",adj1,adj2)
+
+gennam=p1$UseN[p1$Sig=="SA_x NS_y"|p1$Sig=="SB_x NS_y"|p1$Sig=="NS_x SA_y"|p1$Sig=="NS_x SB_y"]
+
+A=LRM_CI_S_GP_wGen
+adj1=Qline(A)
+
+B=LRM_CI_S_GN_wGen
+adj2=Qline(B)
+
+p1=DirPval_tab(A,B,"Sepsis Model","Inflamed Model",adj1,adj2)
+
+patnam=p1$UseN[p1$Sig=="SA_x NS_y"|p1$Sig=="SB_x NS_y"|p1$Sig=="NS_x SA_y"|p1$Sig=="NS_x SB_y"]
+
+resnam=as.character(unique(ests$UseN))
+
+mm=data.frame(matrix(nrow=5,ncol=2))
+colnames(mm)=c("Metabolite","UseN")
+mm$Metabolite=c("X11b_PGF2a","o_acetyl_serine","PGE1","X8iso_PGF3a_wc","taurine")
+for(i in 1:nrow(mm)){
+  mm$UseN[i]=Usenames$Usename[Usenames$Metabolite==mm$Metabolite[i]]
+}
+
+nams=unique(c(gennam,resnam,patnam,mm$UseN))
+xlim=xlim[xlim$name%in%nams,]
+
+xlim$Category=NA
+for(i in 1:nrow(xlim)){
+  met=xlim$name[i]
+xlim$Category[i]=circ$Category[circ$UseN==met]}
+
+xlim$color[xlim$Category=="Amine"]="#00468BFF"
+xlim$color[xlim$Category=="Bile Acid"]="#0099B4FF"
+xlim$color[xlim$Category=="Endocannabinoid"]="#F7923D"
+xlim$color[xlim$Category=="Fatty acid"]="#8C6BB1"
+xlim$color[xlim$Category=="Lysophospholipid"]="#4F976C"
+xlim$color[xlim$Category=="Oxylipin"]="#AE017E"
+xlim$color[xlim$Category=="Steroid Hormone"]="#67001F"
+xlim$color[xlim$Category=="PAF"]="#6A51A3"
+
+
+xlim=xlim%>%arrange(xlim$Category)
+
+xlim$direction_ssi=NA
+xlim$direction_s=NA
+xlim$sig_ssi=NA
+xlim$sig_s=NA
+xlim$cult=NA
+xlim$gen=NA
+xlim$path=NA
+xlim$direction_inflamed=NA
+xlim$direction_sepsis=NA
+xlim$sig_inflamed=NA
+xlim$sig_sepsis=NA
+
+LRM_C_I_wGen1=LRM_C_I_wGen
+LRM_C_S_wGen1=LRM_C_S_wGen
+LRM_CI_S_Male1=LRM_CI_S_Male
+LRM_CI_S_FeMale1=LRM_CI_S_FeMale
+LRM_CI_S_GP_wGen1=LRM_CI_S_GP_wGen
+LRM_CI_S_GN_wGen1=LRM_CI_S_GN_wGen
+LRM_CI_S_wGen1=LRM_CI_S_wGen
+LRM_C_IS_wGen1=LRM_C_IS_wGen
+LRM_CI_S_CP_wGen1=LRM_CI_S_CP
+LRM_CI_S_CN_wGen1=LRM_CI_S_CN
+
+for(i in 1:nrow(LRM_C_I_wGen)){
+  met1=LRM_C_I_wGen1$Metabolite[i]
+  met2=LRM_C_S_wGen1$Metabolite[i]
+  met3=LRM_CI_S_Male1$Metabolite[i]
+  met4=LRM_CI_S_FeMale1$Metabolite[i]
+  met5=LRM_CI_S_GP_wGen1$Metabolite[i]
+  met6=LRM_CI_S_GN_wGen1$Metabolite[i]
+  met7=LRM_C_IS_wGen1$Metabolite[i]
+  met8=LRM_CI_S_wGen1$Metabolite[i]
+  met9=LRM_CI_S_CP_wGen1$Metabolite[i]
+  met10=LRM_CI_S_CN_wGen1$Metabolite[i]
+  if(is.na(LRM_C_I_wGen1$UseN[i])){
+    LRM_C_I_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met1]
+  }
+  if(is.na(LRM_C_S_wGen1$UseN[i])){
+    LRM_C_S_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met2]
+  }
+  if(is.na(LRM_CI_S_Male1$UseN[i])){
+    LRM_CI_S_Male1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met3]
+  }
+  if(is.na(LRM_CI_S_FeMale1$UseN[i])){
+    LRM_CI_S_FeMale1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met4]
+  }
+  if(is.na(LRM_CI_S_GP_wGen1$UseN[i])){
+    LRM_CI_S_GP_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met5]
+  }
+  if(is.na(LRM_CI_S_GN_wGen1$UseN[i])){
+    LRM_CI_S_GN_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met6]
+  }
+  if(is.na(LRM_C_IS_wGen1$UseN[i])){
+    LRM_C_IS_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met7]
+  }
+  if(is.na(LRM_CI_S_wGen1$UseN[i])){
+    LRM_CI_S_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met8]
+  }
+  if(is.na(LRM_CI_S_CP_wGen1$UseN[i])){
+    LRM_CI_S_CP_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met9]
+  }
+  if(is.na(LRM_CI_S_CN_wGen1$UseN[i])){
+    LRM_CI_S_CN_wGen1$UseN[i]=Usenames$Usename[Usenames$Metabolite==met10]
+  }
+}
+
+for(i in 1:nrow(xlim)){
+  met=xlim$name[i]
+  ssi_est=LRM_C_I_wGen1$Estimate[LRM_C_I_wGen1$UseN==met]
+  inflamed_est=LRM_C_IS_wGen1$Estimate[LRM_C_IS_wGen1$UseN==met]
+  sepsis_est=LRM_CI_S_wGen1$Estimate[LRM_CI_S_wGen1$UseN==met]
+  s_est=LRM_C_S_wGen1$Estimate[LRM_C_S_wGen1$UseN==met]
+  ssi_sig=LRM_C_I_wGen1$Shape[LRM_C_I_wGen1$UseN==met]
+  inflamed_sig=LRM_C_IS_wGen1$Shape[LRM_C_IS_wGen1$UseN==met]
+  sepsis_sig=LRM_CI_S_wGen1$Shape[LRM_CI_S_wGen1$UseN==met]
+  s_sig=LRM_C_S_wGen1$Shape[LRM_C_S_wGen1$UseN==met]
+  gen_male=LRM_CI_S_Male1$Shape[LRM_CI_S_Male1$UseN==met]
+  gen_female=LRM_CI_S_FeMale1$Shape[LRM_CI_S_FeMale1$UseN==met]
+  path_gp=LRM_CI_S_GP_wGen1$Shape[LRM_CI_S_GP_wGen1$UseN==met]
+  path_gn=LRM_CI_S_GN_wGen1$Shape[LRM_CI_S_GN_wGen1$UseN==met]
+  path_cp=LRM_CI_S_CP_wGen1$Shape[LRM_CI_S_CP_wGen1$UseN==met]
+  path_cn=LRM_CI_S_CN_wGen1$Shape[LRM_CI_S_CN_wGen1$UseN==met]
+  xlim$direction_ssi[i]=ifelse(ssi_est>0,1,-1)
+  xlim$direction_s[i]=ifelse(s_est>0,1,-1)
+  xlim$sig_ssi[i]=ifelse(ssi_sig=="Significant after correction","#A6CEE3",ifelse(ssi_sig=="Significant before correction","#A6CEE3","gray"))
+  xlim$sig_s[i]=ifelse(s_sig=="Significant after correction","#1F78B4",ifelse(s_sig=="Significant before correction","#1F78B4","gray"))
+  xlim$direction_inflamed[i]=ifelse(inflamed_est>0,1,-1)
+  xlim$direction_sepsis[i]=ifelse(sepsis_est>0,1,-1)
+  xlim$sig_inflamed[i]=ifelse(inflamed_sig=="Significant after correction","#009292",ifelse(inflamed_sig=="Significant before correction","#009292","gray"))
+  xlim$sig_sepsis[i]=ifelse(sepsis_sig=="Significant after correction","#004949",ifelse(sepsis_sig=="Significant before correction","#004949","gray"))
+  
+  xlim$gen[i]=ifelse(gen_male=="Not significant"&gen_female=="Not significant","gray",
+                     ifelse(gen_male=="Not significant"&gen_female!="Not significant","hotpink3",
+                            ifelse(gen_male!="Not significant"&gen_female=="Not significant","royalblue4",
+                                   ifelse(gen_male!="Not significant"&gen_female!="Not significant","olivedrab3",NA))))
+  
+  xlim$path[i]=ifelse(path_gp=="Not significant"&path_gn=="Not significant","gray",
+                     ifelse(path_gp=="Not significant"&path_gn!="Not significant","#3E5B32",
+                            ifelse(path_gp!="Not significant"&path_gn=="Not significant","purple4",
+                                   ifelse(path_gp!="Not significant"&path_gn!="Not significant","gold2",NA))))
+  
+  xlim$cult[i]=ifelse(path_cp=="Not significant"&path_cn=="Not significant","gray",
+                     ifelse(path_cp=="Not significant"&path_cn!="Not significant","paleturquoise2",
+                            ifelse(path_cp!="Not significant"&path_cn=="Not significant","orchid4",
+                                   ifelse(path_cp!="Not significant"&path_cn!="Not significant","firebrick",NA))))
+  
+ 
+}
+```
+
+```{r}
+xlim_amines=xlim[xlim$Category=="Amine",]
+xlim_oxy=xlim[xlim$Category=="Oxylipin",]
+xlim_lyso=xlim[xlim$Category=="Lysophospholipid",]
+xlim_rest=xlim[xlim$Category!="Amine"&xlim$Category!="Oxylipin",]
+xlim_SL=xlim[xlim$Category!="Amine",]
+```
+
+```{r}
+circos_function=function(xlim,cex){
+circ_data=xlim
+cex_use=cex
+circos.clear()
+circos.par(start.degree = 0, gap.degree = 1.5, 
+           track.margin = c(0.005, 0.005), cell.padding = c(0.01, 0, 0.01, 0),canvas.ylim = c(-1.3, 1.3))
+circos.genomicInitialize(circ_data, plotType = "NULL")
+
+# Plot labels
+circos.genomicLabels(circ_data, labels = circ_data$name, niceFacing = TRUE, side = "outside",
+                     padding = 0.01, connection_height = convert_height(5, "mm"), 
+                     cex = cex_use, font = 2, line_lwd = 0.3)
+
+# Plot regions with background colors
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$color, 
+                              bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.05, 
+                              panel.fun = function(region, value, ...) {
+                                for(i in seq_len(nrow(region))) {
+                                  mid_point <- (region$start[i] + region$end[i]) / 2
+                                  if (value$direction_inflamed[i] == 1) {
+                                    circos.text(mid_point, 0.8, "\u2191",  # Unicode up arrow
+                                                cex = 1.2,font=2, facing = "inside")
+                                  } else if (value$direction_inflamed[i] == -1) {
+                                    circos.text(mid_point, 0.8, "\u2193",  # Unicode down arrow
+                                                cex = 1.2, font=2,facing = "inside")
+                                  }
+                                  
+                                }
+                              }, bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$sig_inflamed, 
+                              bg.border = "black", bg.lwd = 0.5)
+
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.05, 
+                              panel.fun = function(region, value, ...) {
+                                for(i in seq_len(nrow(region))) {
+                                  mid_point <- (region$start[i] + region$end[i]) / 2
+                                  if (value$direction_ssi[i] == 1) {
+                                    circos.text(mid_point, 0.8, "\u2191",  # Unicode up arrow
+                                                cex = 1.2, facing = "inside")
+                                  } else if (value$direction_ssi[i] == -1) {
+                                    circos.text(mid_point, 0.8, "\u2193",  # Unicode down arrow
+                                                cex = 1.2, facing = "inside")
+                                  }
+                                  
+                                }
+                              }, bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$sig_ssi, 
+                              bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.05, 
+                              panel.fun = function(region, value, ...) {
+                                for(i in seq_len(nrow(region))) {
+                                  mid_point <- (region$start[i] + region$end[i]) / 2
+                                  if (value$direction_sepsis[i] == 1) {
+                                    circos.text(mid_point, 0.8, "\u2191",  # Unicode up arrow
+                                                cex = 1.2, facing = "inside")
+                                  } else if (value$direction_sepsis[i] == -1) {
+                                    circos.text(mid_point, 0.8, "\u2193",  # Unicode down arrow
+                                                cex = 1.2, facing = "inside")
+                                  }
+                                  
+                                }
+                              }, bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$sig_sepsis, 
+                              bg.border = "black", bg.lwd = 0.5)
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.05, 
+                              panel.fun = function(region, value, ...) {
+                                for(i in seq_len(nrow(region))) {
+                                  mid_point <- (region$start[i] + region$end[i]) / 2
+                                  if (value$direction_s[i] == 1) {
+                                    circos.text(mid_point, 0.8, "\u2191",  # Unicode up arrow
+                                                cex = 1.2, facing = "inside")
+                                  } else if (value$direction_s[i] == -1) {
+                                    circos.text(mid_point, 0.8, "\u2193",  # Unicode down arrow
+                                                cex = 1.2, facing = "inside")
+                                  }
+                                  
+                                }
+                              }, bg.border = "black", bg.lwd = 0.5)
+
+
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$sig_s, 
+                              bg.border = "black", bg.lwd = 0.5)
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$gen, 
+                              bg.border = "black", bg.lwd = 0.5)
+circos.genomicTrackPlotRegion(circ_data, ylim = c(0, 1), track.height = 0.03, bg.col = circ_data$path, 
+                              bg.border = "black", bg.lwd = 0.5)
+
+circos.clear()
+}
+```
+
+
+
+```{r,fig.height=14,fig.width=14}
+png("circos_plot_amines.png", width = 13, height = 13, units = "in", res = 300)
+circos_function(xlim_amines,1.7)
+dev.off()
+
+png("circos_plot_oxy.png", width = 12, height = 12, units = "in", res = 300)
+circos_function(xlim_oxy,1.6)
+dev.off()
+
+png("circos_plot_lyso.png", width = 12, height = 12, units = "in", res = 300)
+circos_function(xlim_lyso,1.6)
+dev.off()
+
+png("circos_plot_rest.png", width = 13, height = 13, units = "in", res = 300)
+circos_function(xlim_rest,1.6)
+dev.off()
+
+png("circos_plot_SL.png", width = 18, height = 18, units = "in", res = 300)
+circos_function(xlim_SL,1.6)
+dev.off()
+```
