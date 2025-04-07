@@ -1,6 +1,9 @@
 # Survival of the littlest: Navigating sepsis diagnosis beyond inflammation in preterm neonates
 This repository contains the R script, input files, and documentation required to reproduce the analysis and figures presented in our manuscript. In this study, we performed targeted metabolomics to profile amines and signaling lipids in 235 plasma samples obtained from preterm neonates to elucidate the pathophysiology of late-onset sepsis and identify biomarkers to accurately distinguish sepsis from non-infectious systemic inflammation. 
-##Structure of repository
+
+
+## Structure of repository
+
 |-Data
 	|-Amines_Data.xlsx 
 	|-High_Data.xlsx 
@@ -12,7 +15,8 @@ This repository contains the R script, input files, and documentation required t
 |-Use Names List.xlsx
 |-Script
 	|-MOMETA Publication Final.Rmd
-##Contents of files
+
+## Contents of files
 Amines_Data: contains area ratios of amines
 High_Data: contains area ratios of signaling lipids measured in the high pH assay
 Low_Data: contains area ratios of signaling lipids measured in the low pH assay
