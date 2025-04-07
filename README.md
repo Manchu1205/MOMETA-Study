@@ -4,6 +4,7 @@ This repository contains the R script, input files, and documentation required t
 
 ## Structure of repository
 
+```
 |-Data
 	|-Amines_Data.xlsx 
 	|-High_Data.xlsx 
@@ -15,6 +16,7 @@ This repository contains the R script, input files, and documentation required t
 |-Use Names List.xlsx
 |-Script
 	|-MOMETA Publication Final.Rmd
+```
 
 ## Contents of files
 Amines_Data: contains area ratios of amines
