@@ -9,11 +9,11 @@ This repository contains the R script, input files, and documentation required t
 	|-Amines_Data.xlsx 
 	|-High_Data.xlsx 
 	|-Low_Data.xlsx 
-|-MetaData for Publication.xlsx 
-|-MetaData Dictionary.xlsx
-|-Metabolite Information Publication.xlsx
-|-Oxylipin Information Publications.xlsx
-|-Use Names List.xlsx
+	|-MetaData for Publication.xlsx 
+	|-MetaData Dictionary.xlsx
+	|-Metabolite Information Publication.xlsx
+	|-Oxylipin Information Publications.xlsx
+	|-Use Names List.xlsx
 |-Script
 	|-MOMETA Publication Final.Rmd
 ```
